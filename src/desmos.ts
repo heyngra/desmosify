@@ -1,4 +1,4 @@
-import { CURVE_LATEX, frameShape, listLatex } from './lib/latex';
+import { CURVE_LATEX, frameExpressions, frameShape, type FrameShape } from './lib/latex';
 import type { Trace } from './lib/types';
 
 const API_KEY = 'dcb31709b452b1cf9dc26972add0fda6';
@@ -41,24 +41,14 @@ function loadDesmos(): Promise<DesmosApi> {
 }
 
 export type Player = {
-  show(frame: number): void;
+  show(shape: FrameShape): void;
   destroy(): void;
 };
 
-function frameExpressions(trace: Trace, frame: number): Expression[] {
-  const shape = frameShape(trace.frames[frame] ?? []);
-  return [
-    { id: 'X_s', latex: `X_{s}=${listLatex(shape.x.start)}`, secret: true },
-    { id: 'X_c1', latex: `X_{c1}=${listLatex(shape.x.c1)}`, secret: true },
-    { id: 'X_c2', latex: `X_{c2}=${listLatex(shape.x.c2)}`, secret: true },
-    { id: 'X_e', latex: `X_{e}=${listLatex(shape.x.end)}`, secret: true },
-    { id: 'Y_s', latex: `Y_{s}=${listLatex(shape.y.start)}`, secret: true },
-    { id: 'Y_c1', latex: `Y_{c1}=${listLatex(shape.y.c1)}`, secret: true },
-    { id: 'Y_c2', latex: `Y_{c2}=${listLatex(shape.y.c2)}`, secret: true },
-    { id: 'Y_e', latex: `Y_{e}=${listLatex(shape.y.end)}`, secret: true },
-    { id: 'S', latex: `S=${shape.count}`, secret: true },
-  ];
-}
+const CURVE: Expression = { id: 'curve', latex: CURVE_LATEX, color: '#2464b4', fill: false, lineWidth: 2 };
+
+const secretExpressions = (shape: FrameShape): Expression[] =>
+  frameExpressions(shape).map((expression) => ({ ...expression, secret: true }));
 
 export async function createPlayer(element: HTMLElement, trace: Trace): Promise<Player> {
   const Desmos = await loadDesmos();
@@ -72,14 +62,10 @@ export async function createPlayer(element: HTMLElement, trace: Trace): Promise<
     expressions: false,
   });
   calc.setMathBounds({ left: 0, right: trace.width, bottom: 0, top: trace.height });
-
-  calc.setExpressions([
-    ...frameExpressions(trace, 0),
-    { id: 'curve', latex: CURVE_LATEX, color: '#2464b4', fill: false, lineWidth: 2 },
-  ]);
+  calc.setExpressions([...secretExpressions(frameShape(trace.frames[0] ?? [])), CURVE]);
 
   return {
-    show: (frame: number) => calc.setExpressions(frameExpressions(trace, frame)),
+    show: (shape: FrameShape) => calc.setExpressions(secretExpressions(shape)),
     destroy: () => calc.destroy(),
   };
 }

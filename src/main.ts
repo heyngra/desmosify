@@ -1,5 +1,5 @@
 import { createPlayer, type Player } from './desmos';
-import { clipLatex, frameLatex, frameShape } from './lib/latex';
+import { clipLatex, frameLatex, frameShape, type FrameShape } from './lib/latex';
 import { buildFlat } from './lib/sample';
 import type { Settings, Trace, WorkerRequest, WorkerResponse } from './lib/types';
 
@@ -43,6 +43,7 @@ let trace: Trace | null = null;
 let player: Player | null = null;
 let timer: number | null = null;
 let frame = 0;
+let clipCache: { trace: Trace; detail: number; contours: number; latex: string } | null = null;
 
 const settings = (): Settings => ({
   width: field('#width'),
@@ -59,33 +60,51 @@ function drawOverlay() {
   const bitmap = trace.overlays[frame];
   if (!bitmap) return;
 
-  overlay.width = bitmap.width;
-  overlay.height = bitmap.height;
-
   const context = overlay.getContext('2d');
   if (!context) return;
 
+  if (overlay.width !== bitmap.width || overlay.height !== bitmap.height) {
+    overlay.width = bitmap.width;
+    overlay.height = bitmap.height;
+  }
+
   context.clearRect(0, 0, overlay.width, overlay.height);
-  context.drawImage(bitmap, 0, 0, overlay.width, overlay.height);
+  context.drawImage(bitmap, 0, 0);
 }
 
-function refreshLatex() {
-  if (!trace) return;
-  if (exportMode.value === 'clip') {
-    const budget = Math.min(9800, field('#detail'));
-    latexArea.value = clipLatex(trace, buildFlat(trace.frames, budget, field('#contours')));
-  } else {
-    latexArea.value = frameLatex(frameShape(trace.frames[frame] ?? [])).join('\n');
+function clipText(detail: number, contours: number): string {
+  if (!trace) return '';
+
+  const cached = clipCache;
+  if (cached && cached.trace === trace && cached.detail === detail && cached.contours === contours) {
+    return cached.latex;
   }
+
+  const latex = clipLatex(trace, buildFlat(trace.frames, detail, contours));
+  clipCache = { trace, detail, contours, latex };
+  return latex;
+}
+
+function refreshLatex(shape?: FrameShape) {
+  if (!trace) return;
+
+  const text =
+    exportMode.value === 'clip'
+      ? clipText(Math.min(9800, field('#detail')), field('#contours'))
+      : frameLatex(shape ?? frameShape(trace.frames[frame] ?? [])).join('\n');
+
+  if (latexArea.value !== text) latexArea.value = text;
 }
 
 function paint() {
   if (!trace) return;
-  player?.show(frame);
+
+  const shape = frameShape(trace.frames[frame] ?? []);
+  player?.show(shape);
   scrub.value = String(frame);
   frameLabel.textContent = `${frame + 1} / ${trace.frameCount}`;
   drawOverlay();
-  refreshLatex();
+  refreshLatex(shape);
 }
 
 function stop() {
@@ -111,6 +130,7 @@ function start() {
 function releaseTrace() {
   if (trace) for (const bitmap of trace.overlays) bitmap.close();
   trace = null;
+  clipCache = null;
 }
 
 fileInput.addEventListener('change', () => acceptFile(fileInput.files?.[0]));
@@ -159,7 +179,7 @@ overlayToggle.addEventListener('change', () => {
   drawOverlay();
 });
 
-exportMode.addEventListener('change', refreshLatex);
+exportMode.addEventListener('change', () => refreshLatex());
 
 copyButton.addEventListener('click', async () => {
   try {

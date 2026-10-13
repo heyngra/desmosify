@@ -10,6 +10,7 @@ export function listLatex(values: number[]): string {
 
 export type FrameCoords = { start: number[]; c1: number[]; c2: number[]; end: number[] };
 export type FrameShape = { count: number; x: FrameCoords; y: FrameCoords };
+export type FrameExpression = { id: string; latex: string };
 
 const emptyCoords = (): FrameCoords => ({ start: [], c1: [], c2: [], end: [] });
 
@@ -43,24 +44,30 @@ export function frameShape(contours: Contour[]): FrameShape {
   return { count: x.start.length, x, y };
 }
 
+function axisExpressions(axis: string, coords: FrameCoords): FrameExpression[] {
+  return [
+    { id: `${axis}_s`, latex: `${axis}_{s}=${listLatex(coords.start)}` },
+    { id: `${axis}_c1`, latex: `${axis}_{c1}=${listLatex(coords.c1)}` },
+    { id: `${axis}_c2`, latex: `${axis}_{c2}=${listLatex(coords.c2)}` },
+    { id: `${axis}_e`, latex: `${axis}_{e}=${listLatex(coords.end)}` },
+  ];
+}
+
+export function frameExpressions(shape: FrameShape): FrameExpression[] {
+  return [
+    ...axisExpressions('X', shape.x),
+    ...axisExpressions('Y', shape.y),
+    { id: 'S', latex: `S=${shape.count}` },
+  ];
+}
+
 const bernstein = (axis: string) =>
   `\\left(1-t\\right)^{3}${axis}_{s}\\left[1...S\\right]+3\\left(1-t\\right)^{2}t${axis}_{c1}\\left[1...S\\right]+3\\left(1-t\\right)t^{2}${axis}_{c2}\\left[1...S\\right]+t^{3}${axis}_{e}\\left[1...S\\right]`;
 
 export const CURVE_LATEX = `\\left(${bernstein('X')},${bernstein('Y')}\\right)`;
 
 export function frameLatex(shape: FrameShape): string[] {
-  return [
-    `X_{s}=${listLatex(shape.x.start)}`,
-    `X_{c1}=${listLatex(shape.x.c1)}`,
-    `X_{c2}=${listLatex(shape.x.c2)}`,
-    `X_{e}=${listLatex(shape.x.end)}`,
-    `Y_{s}=${listLatex(shape.y.start)}`,
-    `Y_{c1}=${listLatex(shape.y.c1)}`,
-    `Y_{c2}=${listLatex(shape.y.c2)}`,
-    `Y_{e}=${listLatex(shape.y.end)}`,
-    `S=${shape.count}`,
-    CURVE_LATEX,
-  ];
+  return [...frameExpressions(shape).map((expression) => expression.latex), CURVE_LATEX];
 }
 
 function slotRangeLatex(stride: number, slot: Slot): string {
@@ -68,7 +75,7 @@ function slotRangeLatex(stride: number, slot: Slot): string {
   return `${base}+${slot.offset + 1}...${base}+${slot.offset + slot.length}`;
 }
 
-export function clipShapeLatex(stride: number, slot: Slot): string {
+function clipShapeLatex(stride: number, slot: Slot): string {
   const from = slotRangeLatex(stride, { offset: slot.offset, length: slot.length - 1 });
   const to = slotRangeLatex(stride, { offset: slot.offset + 1, length: slot.length - 1 });
   return (
