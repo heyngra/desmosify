@@ -25,7 +25,7 @@ function loadDesmos(): Promise<DesmosApi> {
   if (existing) return Promise.resolve(existing);
   if (pending) return pending;
 
-  pending = new Promise<DesmosApi>((resolve, reject) => {
+  const load = new Promise<DesmosApi>((resolve, reject) => {
     const script = document.createElement('script');
     script.src = SCRIPT;
     script.onload = () => {
@@ -33,10 +33,17 @@ function loadDesmos(): Promise<DesmosApi> {
       if (api) resolve(api);
       else reject(new Error('Desmos loaded but exported nothing.'));
     };
-    script.onerror = () => reject(new Error('Could not reach desmos.com.'));
+    script.onerror = () => {
+      script.remove();
+      reject(new Error('Could not reach desmos.com.'));
+    };
     document.head.appendChild(script);
   });
 
+  pending = load.catch((error: unknown) => {
+    pending = null;
+    throw error;
+  });
   return pending;
 }
 
