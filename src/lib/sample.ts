@@ -73,7 +73,7 @@ export type Packed = {
   dropped: number;
 };
 
-export const LIST_LIMIT = 9800;
+const LIST_LIMIT = 9800;
 
 const MIN_SLOT_POINTS = 4;
 const BASE_STEP = 0.8;
@@ -124,6 +124,49 @@ function fitBudget(lengths: number[], perFrame: number): number[] {
   return fitted;
 }
 
+function seedStep(lines: FlatContour[][], slotCount: number, perFrame: number): number {
+  const longest = new Array<number>(slotCount).fill(0);
+  for (const frame of lines) {
+    const count = Math.min(frame.length, slotCount);
+    for (let i = 0; i < count; i++) {
+      if (frame[i].length > longest[i]) longest[i] = frame[i].length;
+    }
+  }
+
+  const room = perFrame - 2 * slotCount;
+  if (room <= 0) return BASE_STEP;
+
+  const span = longest.reduce((sum, length) => sum + length, 0);
+  return Math.max(BASE_STEP, span / room);
+}
+
+type Sampling = { step: number; resampled: Point[][][]; lengths: number[]; total: number };
+
+function sampleAt(lines: FlatContour[][], slotCount: number, step: number): Sampling {
+  const resampled = resampleFrames(lines, slotCount, step);
+  const lengths = measure(resampled, slotCount);
+  return { step, resampled, lengths, total: lengths.reduce((sum, length) => sum + length, 0) };
+}
+
+function fitStep(lines: FlatContour[][], slotCount: number, perFrame: number): Sampling {
+  let sample = sampleAt(lines, slotCount, seedStep(lines, slotCount, perFrame));
+
+  for (let attempt = 0; attempt < 3 && sample.total > perFrame; attempt++) {
+    sample = sampleAt(lines, slotCount, sample.step * (sample.total / perFrame));
+  }
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const finer = Math.max(BASE_STEP, sample.step * (sample.total / perFrame));
+    if (finer >= sample.step) break;
+
+    const candidate = sampleAt(lines, slotCount, finer);
+    if (candidate.total > perFrame) break;
+    sample = candidate;
+  }
+
+  return sample;
+}
+
 export function buildFlat(frames: Contour[][], budget: number, maxSlots: number): Packed {
   const frameCount = Math.max(1, frames.length);
   const safeBudget = Number.isFinite(budget) ? budget : LIST_LIMIT;
@@ -148,19 +191,9 @@ export function buildFlat(frames: Contour[][], budget: number, maxSlots: number)
   }
 
   const lines = flattened.map((frame) => frame.lines);
-  let step = BASE_STEP;
-  let lengths: number[] = [];
-  let resampled: Point[][][] = [];
-
-  for (let attempt = 0; attempt < 6; attempt++) {
-    resampled = resampleFrames(lines, slotCount, step);
-    lengths = measure(resampled, slotCount);
-    const total = lengths.reduce((sum, length) => sum + length, 0);
-    if (total <= perFrame) break;
-    step *= total / perFrame;
-  }
-
-  lengths = fitBudget(lengths, perFrame);
+  const sampled = fitStep(lines, slotCount, perFrame);
+  const resampled = sampled.resampled;
+  const lengths = fitBudget(sampled.lengths, perFrame);
 
   const slots: Slot[] = [];
   let offset = 0;
