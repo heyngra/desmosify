@@ -1,0 +1,215 @@
+import { createPlayer, type Player } from './desmos';
+import { clipLatex, frameLatex, frameShape } from './lib/latex';
+import { buildFlat } from './lib/sample';
+import type { Settings, Trace, WorkerRequest, WorkerResponse } from './lib/types';
+
+const fileInput = document.querySelector<HTMLInputElement>('#file')!;
+const runButton = document.querySelector<HTMLButtonElement>('#run')!;
+const dropZone = document.querySelector<HTMLLabelElement>('#drop')!;
+const fileName = document.querySelector<HTMLSpanElement>('#fileName')!;
+const notice = document.querySelector<HTMLParagraphElement>('#notice')!;
+const output = document.querySelector<HTMLElement>('#out')!;
+const latexArea = document.querySelector<HTMLTextAreaElement>('#latex')!;
+const copyButton = document.querySelector<HTMLButtonElement>('#copy')!;
+const exportMode = document.querySelector<HTMLSelectElement>('#exportMode')!;
+const previewCard = document.querySelector<HTMLElement>('#preview')!;
+const calculator = document.querySelector<HTMLElement>('#calculator')!;
+const overlay = document.querySelector<HTMLCanvasElement>('#overlay')!;
+const overlayToggle = document.querySelector<HTMLInputElement>('#overlayToggle')!;
+const playButton = document.querySelector<HTMLButtonElement>('#play')!;
+const scrub = document.querySelector<HTMLInputElement>('#scrub')!;
+const frameLabel = document.querySelector<HTMLSpanElement>('#frameLabel')!;
+
+const field = (id: string) => Number(document.querySelector<HTMLInputElement>(id)!.value);
+
+function showNotice(message: string) {
+  notice.textContent = message;
+  notice.hidden = !message;
+}
+
+function acceptFile(file: File | undefined) {
+  if (!file) return;
+  const transfer = new DataTransfer();
+  transfer.items.add(file);
+  fileInput.files = transfer.files;
+  fileName.textContent = file.name;
+  runButton.disabled = false;
+  showNotice('');
+}
+
+const worker = new Worker(new URL('./pipeline.worker.ts', import.meta.url), { type: 'module' });
+let busy = false;
+let trace: Trace | null = null;
+let player: Player | null = null;
+let timer: number | null = null;
+let frame = 0;
+
+const settings = (): Settings => ({
+  width: field('#width'),
+  fps: field('#fps'),
+  maxFrames: field('#frames'),
+  detail: field('#detail'),
+  contours: field('#contours'),
+  sensitivity: field('#sensitivity'),
+});
+
+function drawOverlay() {
+  if (!trace || !overlayToggle.checked) return;
+
+  const bitmap = trace.overlays[frame];
+  if (!bitmap) return;
+
+  overlay.width = bitmap.width;
+  overlay.height = bitmap.height;
+
+  const context = overlay.getContext('2d');
+  if (!context) return;
+
+  context.clearRect(0, 0, overlay.width, overlay.height);
+  context.drawImage(bitmap, 0, 0, overlay.width, overlay.height);
+}
+
+function refreshLatex() {
+  if (!trace) return;
+  if (exportMode.value === 'clip') {
+    const budget = Math.min(9800, field('#detail'));
+    latexArea.value = clipLatex(trace, buildFlat(trace.frames, budget, field('#contours')));
+  } else {
+    latexArea.value = frameLatex(frameShape(trace.frames[frame] ?? [])).join('\n');
+  }
+}
+
+function paint() {
+  if (!trace) return;
+  player?.show(frame);
+  scrub.value = String(frame);
+  frameLabel.textContent = `${frame + 1} / ${trace.frameCount}`;
+  drawOverlay();
+  refreshLatex();
+}
+
+function stop() {
+  if (timer !== null) {
+    clearInterval(timer);
+    timer = null;
+  }
+  playButton.textContent = 'Play';
+}
+
+function start() {
+  if (!trace) return;
+  stop();
+  const every = Math.max(60, 1000 / trace.fps);
+  timer = window.setInterval(() => {
+    if (!trace) return;
+    frame = (frame + 1) % trace.frameCount;
+    paint();
+  }, every);
+  playButton.textContent = 'Pause';
+}
+
+function releaseTrace() {
+  if (trace) for (const bitmap of trace.overlays) bitmap.close();
+  trace = null;
+}
+
+fileInput.addEventListener('change', () => acceptFile(fileInput.files?.[0]));
+
+dropZone.addEventListener('dragover', (event) => {
+  event.preventDefault();
+  dropZone.classList.add('over');
+});
+
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+
+dropZone.addEventListener('drop', (event) => {
+  event.preventDefault();
+  dropZone.classList.remove('over');
+  acceptFile(event.dataTransfer?.files[0]);
+});
+
+runButton.addEventListener('click', () => {
+  const file = fileInput.files?.[0];
+  if (!file || busy) return;
+
+  busy = true;
+  runButton.disabled = true;
+  runButton.textContent = 'Converting…';
+  output.hidden = true;
+  previewCard.hidden = true;
+  showNotice('');
+  stop();
+
+  const request: WorkerRequest = { file, settings: settings() };
+  worker.postMessage(request);
+});
+
+playButton.addEventListener('click', () => {
+  if (timer === null) start();
+  else stop();
+});
+
+scrub.addEventListener('input', () => {
+  frame = Number(scrub.value);
+  paint();
+});
+
+overlayToggle.addEventListener('change', () => {
+  overlay.hidden = !overlayToggle.checked;
+  drawOverlay();
+});
+
+exportMode.addEventListener('change', refreshLatex);
+
+copyButton.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(latexArea.value);
+    copyButton.textContent = 'Copied';
+    setTimeout(() => {
+      copyButton.textContent = 'Copy';
+    }, 1200);
+  } catch {
+    latexArea.select();
+    copyButton.textContent = 'Select + Ctrl-C';
+  }
+});
+
+worker.onmessage = async (event: MessageEvent<WorkerResponse>) => {
+  const message = event.data;
+
+  if (message.type === 'progress') {
+    const percent = message.total > 0 ? Math.round((message.done / message.total) * 100) : 0;
+    runButton.textContent = `${message.label} ${percent}%`;
+    return;
+  }
+
+  busy = false;
+  runButton.disabled = false;
+  runButton.textContent = 'Convert';
+
+  if (message.type === 'error') {
+    showNotice(message.message);
+    return;
+  }
+
+  releaseTrace();
+  trace = message.trace;
+  player?.destroy();
+  player = null;
+  frame = 0;
+
+  latexArea.value = '';
+  output.hidden = false;
+  previewCard.hidden = false;
+  scrub.min = '0';
+  scrub.max = String(Math.max(0, trace.frameCount - 1));
+
+  try {
+    player = await createPlayer(calculator, trace);
+    paint();
+    start();
+  } catch (error) {
+    previewCard.hidden = true;
+    showNotice(`Preview unavailable (${error instanceof Error ? error.message : 'unknown error'}).`);
+  }
+};
