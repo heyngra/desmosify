@@ -18,17 +18,21 @@ function ensureReady(): Promise<void> {
   return ready;
 }
 
+let pixels = new Uint8ClampedArray(0);
+
 function maskToImageData(mask: Uint8Array, width: number, height: number): ImageData {
-  const data = new Uint8ClampedArray(width * height * 4);
-  for (let i = 0; i < mask.length; i++) {
+  const size = width * height;
+  if (pixels.length !== size * 4) pixels = new Uint8ClampedArray(size * 4);
+
+  for (let i = 0; i < size; i++) {
     const value = mask[i] ? 0 : 255;
     const p = i * 4;
-    data[p] = value;
-    data[p + 1] = value;
-    data[p + 2] = value;
-    data[p + 3] = 255;
+    pixels[p] = value;
+    pixels[p + 1] = value;
+    pixels[p + 2] = value;
+    pixels[p + 3] = 255;
   }
-  return new ImageData(data, width, height);
+  return new ImageData(pixels, width, height);
 }
 
 export async function traceMask(mask: Uint8Array, width: number, height: number): Promise<Contour[]> {
