@@ -1,7 +1,9 @@
 import { BlobSource, CanvasSink, Input, MATROSKA, MP4, QTFF, WEBM } from 'mediabunny';
 import { canny } from './lib/canny';
+import { outputSize } from './lib/render';
+import { capContours } from './lib/sample';
 import { traceMask } from './lib/trace';
-import type { Contour, Settings, Trace, WorkerRequest, WorkerResponse } from './lib/types';
+import type { Contour, Settings, SourceVideo, Trace, WorkerRequest, WorkerResponse } from './lib/types';
 
 const FORMATS = [MP4, QTFF, MATROSKA, WEBM];
 const OVERLAY_BYTES = 48 * 1024 * 1024;
@@ -29,7 +31,20 @@ function overlaySize(width: number, height: number, frames: number): { w: number
   return { w: Math.max(64, Math.floor(width * scale)), h: Math.max(36, Math.floor(height * scale)) };
 }
 
-async function convert(file: File, settings: Settings): Promise<Trace> {
+function fit(width: number, displayWidth: number, displayHeight: number): { width: number; height: number } {
+  const w = Math.max(48, Math.round(width));
+  return { width: w, height: Math.max(48, Math.round((w * displayHeight) / displayWidth)) };
+}
+
+type Opened = {
+  track: NonNullable<Awaited<ReturnType<Input['getPrimaryVideoTrack']>>>;
+  duration: number;
+  displayWidth: number;
+  displayHeight: number;
+  source: SourceVideo;
+};
+
+async function open(file: File): Promise<Opened> {
   const input = new Input({ source: new BlobSource(file), formats: FORMATS });
   if (!(await input.canRead())) {
     throw new Error('Could not read this container. Use MP4, MOV, WebM or MKV.');
@@ -43,15 +58,31 @@ async function convert(file: File, settings: Settings): Promise<Trace> {
 
   const displayWidth = await track.getDisplayWidth();
   const displayHeight = await track.getDisplayHeight();
-  const width = Math.max(48, Math.round(settings.width));
-  const height = Math.max(48, Math.round((width * displayHeight) / displayWidth));
+  const stats = await track.computePacketStats();
 
-  const duration = await input.computeDuration();
+  return {
+    track,
+    duration: await input.computeDuration(),
+    displayWidth,
+    displayHeight,
+    source: {
+      width: Math.round(displayWidth),
+      height: Math.round(displayHeight),
+      fps: Math.max(1, stats.averagePacketRate),
+      frameCount: Math.max(1, stats.packetCount),
+    },
+  };
+}
+
+async function convert(file: File, settings: Settings): Promise<Trace> {
+  const opened = await open(file);
+  const { source } = opened;
+  const { width, height } = fit(settings.width, opened.displayWidth, opened.displayHeight);
   const fps = Math.max(1, settings.fps);
-  const total = Math.max(1, Math.min(Math.round(settings.maxFrames), Math.floor(duration * fps)));
+  const total = Math.max(1, Math.min(Math.round(settings.maxFrames), Math.floor(opened.duration * fps)));
 
   const times = Array.from({ length: total }, (_, i) => i / fps);
-  const sink = new CanvasSink(track, { width, poolSize: 2 });
+  const sink = new CanvasSink(opened.track, { width, poolSize: 2 });
 
   const { w: ow, h: oh } = overlaySize(width, height, total);
   const stage = new OffscreenCanvas(ow, oh);
@@ -82,22 +113,86 @@ async function convert(file: File, settings: Settings): Promise<Trace> {
 
   if (traced.length === 0) throw new Error('No frames could be decoded from this file.');
 
-  return {
-    width,
-    height,
-    fps,
-    frameCount: traced.length,
-    segmentCount,
-    frames: traced,
-    overlays,
-  };
+  return { width, height, fps, frameCount: traced.length, segmentCount, frames: traced, overlays, source };
 }
 
-port.onmessage = (event) => {
-  const { file, settings } = event.data;
-  convert(file, settings)
-    .then((trace) => send({ type: 'result', trace }, trace.overlays))
-    .catch((error: unknown) =>
-      send({ type: 'error', message: error instanceof Error ? error.message : String(error) }),
-    );
+type SinkFrames = ReturnType<CanvasSink['canvasesAtTimestamps']>;
+
+type RenderSession = {
+  frames: SinkFrames;
+  sensitivity: number;
+  index: number;
+  total: number;
+};
+
+let session: RenderSession | null = null;
+
+function closeRender(): void {
+  const current = session;
+  session = null;
+  void current?.frames.return?.();
+}
+
+async function startRender(
+  file: File,
+  detail: number,
+  height: number | null,
+  sensitivity: number,
+): Promise<void> {
+  const opened = await open(file);
+  const { source } = opened;
+  const plan = outputSize(source, height);
+  const trace = fit(plan.width * detail, opened.displayWidth, opened.displayHeight);
+  const total = Math.max(1, Math.min(source.frameCount, Math.floor(opened.duration * source.fps)));
+  const times = Array.from({ length: total }, (_, i) => i / source.fps);
+  const sink = new CanvasSink(opened.track, { width: trace.width, poolSize: 2 });
+
+  session = { frames: sink.canvasesAtTimestamps(times), sensitivity, index: 0, total };
+  send({ type: 'renderMeta', source, plan, trace });
+}
+
+async function nextRenderFrame(): Promise<void> {
+  const current = session;
+  if (!current) return;
+
+  for (;;) {
+    const { value, done } = await current.frames.next();
+    if (session !== current) return;
+
+    if (done || !value) {
+      session = null;
+      send({ type: 'renderDone' });
+      return;
+    }
+
+    const { canvas } = value;
+    const image = get2d(canvas).getImageData(0, 0, canvas.width, canvas.height);
+    const mask = canny(image.data, canvas.width, canvas.height, current.sensitivity);
+    const contours = capContours(await traceMask(mask, canvas.width, canvas.height));
+    if (session !== current) return;
+
+    send({ type: 'renderFrame', contours, index: current.index++, total: current.total });
+    return;
+  }
+}
+
+port.onmessage = async (event) => {
+  const message = event.data;
+
+  try {
+    if (message.type === 'convert') {
+      const trace = await convert(message.file, message.settings);
+      send({ type: 'result', trace }, trace.overlays);
+    } else if (message.type === 'render') {
+      closeRender();
+      await startRender(message.file, message.detail, message.height, message.sensitivity);
+    } else if (message.type === 'renderNext') {
+      await nextRenderFrame();
+    } else {
+      closeRender();
+    }
+  } catch (error) {
+    closeRender();
+    send({ type: 'error', message: error instanceof Error ? error.message : String(error) });
+  }
 };

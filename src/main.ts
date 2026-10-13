@@ -1,7 +1,9 @@
 import { createPlayer, type Player } from './desmos';
 import { clipLatex, frameLatex, frameShape, type FrameShape } from './lib/latex';
+import { lineWidthFor, renderPlan } from './lib/render';
 import { buildFlat } from './lib/sample';
-import type { Settings, Trace, WorkerRequest, WorkerResponse } from './lib/types';
+import { renderVideo } from './render';
+import type { Contour, RenderMeta, Settings, Trace, WorkerRequest, WorkerResponse } from './lib/types';
 
 const fileInput = document.querySelector<HTMLInputElement>('#file')!;
 const runButton = document.querySelector<HTMLButtonElement>('#run')!;
@@ -19,12 +21,40 @@ const overlayToggle = document.querySelector<HTMLInputElement>('#overlayToggle')
 const playButton = document.querySelector<HTMLButtonElement>('#play')!;
 const scrub = document.querySelector<HTMLInputElement>('#scrub')!;
 const frameLabel = document.querySelector<HTMLSpanElement>('#frameLabel')!;
+const renderButton = document.querySelector<HTMLButtonElement>('#render')!;
+const renderInfo = document.querySelector<HTMLSpanElement>('#renderInfo')!;
+const renderDialog = document.querySelector<HTMLDialogElement>('#renderDialog')!;
+const renderCancel = document.querySelector<HTMLButtonElement>('#renderCancel')!;
+const renderGo = document.querySelector<HTMLButtonElement>('#renderGo')!;
+const renderSize = document.querySelector<HTMLSelectElement>('#renderSize')!;
 
 const field = (id: string) => Number(document.querySelector<HTMLInputElement>(id)!.value);
+const formatFps = (fps: number) => `${Math.round(fps * 100) / 100} fps`;
+const sourceLabel = (source: Trace['source']) =>
+  `${source.width}×${source.height} · ${formatFps(source.fps)} · ${source.frameCount} frames`;
 
 function showNotice(message: string) {
   notice.textContent = message;
   notice.hidden = !message;
+}
+
+function syncControls() {
+  const idle = !busy && !rendering;
+  const hasFile = !!fileInput.files?.length;
+  runButton.disabled = !idle || !hasFile;
+  renderButton.disabled = !idle || !hasFile;
+}
+
+function save(blob: Blob) {
+  const name = fileInput.files?.[0]?.name ?? 'desmos';
+  const base = name.replace(/\.[^.]+$/, '') || 'desmos';
+  const extension = blob.type.includes('webm') ? 'webm' : 'mp4';
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${base} (desmos).${extension}`;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 function acceptFile(file: File | undefined) {
@@ -33,7 +63,7 @@ function acceptFile(file: File | undefined) {
   transfer.items.add(file);
   fileInput.files = transfer.files;
   fileName.textContent = file.name;
-  runButton.disabled = false;
+  syncControls();
   showNotice('');
 }
 
@@ -44,6 +74,10 @@ let player: Player | null = null;
 let timer: number | null = null;
 let frame = 0;
 let clipCache: { trace: Trace; detail: number; contours: number; latex: string } | null = null;
+let rendering = false;
+let metaWait: { resolve: (meta: RenderMeta) => void; reject: (error: Error) => void } | null = null;
+let frameWait: { resolve: (contours: Contour[] | null) => void; reject: (error: Error) => void } | null =
+  null;
 
 const settings = (): Settings => ({
   width: field('#width'),
@@ -150,18 +184,17 @@ dropZone.addEventListener('drop', (event) => {
 
 runButton.addEventListener('click', () => {
   const file = fileInput.files?.[0];
-  if (!file || busy) return;
+  if (!file || busy || rendering) return;
 
   busy = true;
-  runButton.disabled = true;
   runButton.textContent = 'Converting…';
   output.hidden = true;
   previewCard.hidden = true;
   showNotice('');
   stop();
+  syncControls();
 
-  const request: WorkerRequest = { file, settings: settings() };
-  worker.postMessage(request);
+  worker.postMessage({ type: 'convert', file, settings: settings() } satisfies WorkerRequest);
 });
 
 playButton.addEventListener('click', () => {
@@ -194,8 +227,114 @@ copyButton.addEventListener('click', async () => {
   }
 });
 
+function startRender(file: File, detail: number, sensitivity: number): Promise<RenderMeta> {
+  const height = renderSize.value === 'source' ? null : Number(renderSize.value);
+  return new Promise((resolve, reject) => {
+    metaWait = { resolve, reject };
+    worker.postMessage({ type: 'render', file, detail, height, sensitivity } satisfies WorkerRequest);
+  });
+}
+
+function pullFrame(): Promise<Contour[] | null> {
+  return new Promise((resolve, reject) => {
+    frameWait = { resolve, reject };
+    worker.postMessage({ type: 'renderNext' } satisfies WorkerRequest);
+  });
+}
+
+async function* renderFrames(total: number): AsyncGenerator<Contour[]> {
+  let pending: Promise<Contour[] | null> = pullFrame();
+
+  for (let i = 0; i < total; i++) {
+    const contours = await pending;
+    if (!contours) return;
+    pending = i + 1 < total ? pullFrame() : Promise.resolve(null);
+    yield contours;
+  }
+}
+
+function failRender(error: Error): void {
+  metaWait?.reject(error);
+  metaWait = null;
+  frameWait?.reject(error);
+  frameWait = null;
+}
+
+renderButton.addEventListener('click', () => {
+  if (rendering || busy || !fileInput.files?.length) return;
+  if (!renderDialog.open) renderDialog.showModal();
+});
+
+renderCancel.addEventListener('click', () => renderDialog.close());
+
+renderGo.addEventListener('click', () => {
+  renderDialog.close();
+  void runRender();
+});
+
+async function runRender(): Promise<void> {
+  const file = fileInput.files?.[0];
+  if (!file || rendering || busy) return;
+
+  rendering = true;
+  renderButton.textContent = 'Converting…';
+  syncControls();
+  showNotice('');
+
+  let started = false;
+  try {
+    const meta = await startRender(file, field('#detailScale'), field('#sensitivity'));
+    started = true;
+    renderInfo.textContent =
+      `${meta.plan.width}×${meta.plan.height} · ${formatFps(meta.source.fps)} · ${meta.source.frameCount} frames` +
+      ` · trace ${meta.trace.width}×${meta.trace.height}`;
+
+    const plan = renderPlan(meta.source, {
+      width: meta.plan.width,
+      height: meta.plan.height,
+      lineWidth: lineWidthFor(meta.plan.height, field('#lineWidth')),
+    });
+    const blob = await renderVideo(
+      { bounds: meta.trace, frames: renderFrames(meta.source.frameCount) },
+      plan,
+      (done, total) => {
+        renderButton.textContent = `Rendering ${Math.round((done / total) * 100)}%`;
+      },
+    );
+    save(blob);
+  } catch (error) {
+    showNotice(`Render failed (${error instanceof Error ? error.message : 'unknown error'}).`);
+  } finally {
+    if (started) worker.postMessage({ type: 'renderClose' } satisfies WorkerRequest);
+    rendering = false;
+    renderButton.textContent = 'Render';
+    syncControls();
+  }
+}
+
 worker.onmessage = async (event: MessageEvent<WorkerResponse>) => {
   const message = event.data;
+
+  if (message.type === 'renderMeta') {
+    const wait = metaWait;
+    metaWait = null;
+    wait?.resolve(message);
+    return;
+  }
+
+  if (message.type === 'renderFrame') {
+    const wait = frameWait;
+    frameWait = null;
+    wait?.resolve(message.contours);
+    return;
+  }
+
+  if (message.type === 'renderDone') {
+    const wait = frameWait;
+    frameWait = null;
+    wait?.resolve(null);
+    return;
+  }
 
   if (message.type === 'progress') {
     const percent = message.total > 0 ? Math.round((message.done / message.total) * 100) : 0;
@@ -203,15 +342,20 @@ worker.onmessage = async (event: MessageEvent<WorkerResponse>) => {
     return;
   }
 
-  busy = false;
-  runButton.disabled = false;
-  runButton.textContent = 'Convert';
-
   if (message.type === 'error') {
+    if (rendering) {
+      failRender(new Error(message.message));
+      return;
+    }
+    busy = false;
+    runButton.textContent = 'Convert';
     showNotice(message.message);
+    syncControls();
     return;
   }
 
+  busy = false;
+  runButton.textContent = 'Convert';
   releaseTrace();
   trace = message.trace;
   player?.destroy();
@@ -223,6 +367,8 @@ worker.onmessage = async (event: MessageEvent<WorkerResponse>) => {
   previewCard.hidden = false;
   scrub.min = '0';
   scrub.max = String(Math.max(0, trace.frameCount - 1));
+  renderInfo.textContent = sourceLabel(trace.source);
+  syncControls();
 
   try {
     player = await createPlayer(calculator, trace);

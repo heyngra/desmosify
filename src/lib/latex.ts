@@ -14,6 +14,30 @@ export type FrameExpression = { id: string; latex: string };
 
 const emptyCoords = (): FrameCoords => ({ start: [], c1: [], c2: [], end: [] });
 
+export function emptyFrameShape(): FrameShape {
+  return { count: 0, x: emptyCoords(), y: emptyCoords() };
+}
+
+export const CHUNK_SIZE = 4000;
+
+function sliceCoords(coords: FrameCoords, start: number, end: number): FrameCoords {
+  return {
+    start: coords.start.slice(start, end),
+    c1: coords.c1.slice(start, end),
+    c2: coords.c2.slice(start, end),
+    end: coords.end.slice(start, end),
+  };
+}
+
+export function shapeChunks(shape: FrameShape, size = CHUNK_SIZE): FrameShape[] {
+  const chunks: FrameShape[] = [];
+  for (let start = 0; start < shape.count; start += size) {
+    const end = Math.min(shape.count, start + size);
+    chunks.push({ count: end - start, x: sliceCoords(shape.x, start, end), y: sliceCoords(shape.y, start, end) });
+  }
+  return chunks.length > 0 ? chunks : [emptyFrameShape()];
+}
+
 function pushLine(coords: FrameCoords, p0: number, p1: number): void {
   coords.start.push(round(p0));
   coords.c1.push(round(p0 + (p1 - p0) / 3));
@@ -44,27 +68,39 @@ export function frameShape(contours: Contour[]): FrameShape {
   return { count: x.start.length, x, y };
 }
 
-function axisExpressions(axis: string, coords: FrameCoords): FrameExpression[] {
+function axisExpressions(axis: string, coords: FrameCoords, suffix: string): FrameExpression[] {
   return [
-    { id: `${axis}_s`, latex: `${axis}_{s}=${listLatex(coords.start)}` },
-    { id: `${axis}_c1`, latex: `${axis}_{c1}=${listLatex(coords.c1)}` },
-    { id: `${axis}_c2`, latex: `${axis}_{c2}=${listLatex(coords.c2)}` },
-    { id: `${axis}_e`, latex: `${axis}_{e}=${listLatex(coords.end)}` },
+    { id: `${axis}_s${suffix}`, latex: `${axis}_{s${suffix}}=${listLatex(coords.start)}` },
+    { id: `${axis}_c1${suffix}`, latex: `${axis}_{c1${suffix}}=${listLatex(coords.c1)}` },
+    { id: `${axis}_c2${suffix}`, latex: `${axis}_{c2${suffix}}=${listLatex(coords.c2)}` },
+    { id: `${axis}_e${suffix}`, latex: `${axis}_{e${suffix}}=${listLatex(coords.end)}` },
   ];
 }
 
-export function frameExpressions(shape: FrameShape): FrameExpression[] {
+const countName = (suffix: string) => (suffix ? `S_{n${suffix}}` : 'S');
+
+export function frameExpressions(shape: FrameShape, suffix = ''): FrameExpression[] {
   return [
-    ...axisExpressions('X', shape.x),
-    ...axisExpressions('Y', shape.y),
-    { id: 'S', latex: `S=${shape.count}` },
+    ...axisExpressions('X', shape.x, suffix),
+    ...axisExpressions('Y', shape.y, suffix),
+    { id: `S${suffix}`, latex: `${countName(suffix)}=${shape.count}` },
   ];
 }
 
-const bernstein = (axis: string) =>
-  `\\left(1-t\\right)^{3}${axis}_{s}\\left[1...S\\right]+3\\left(1-t\\right)^{2}t${axis}_{c1}\\left[1...S\\right]+3\\left(1-t\\right)t^{2}${axis}_{c2}\\left[1...S\\right]+t^{3}${axis}_{e}\\left[1...S\\right]`;
+const bernstein = (axis: string, suffix: string) =>
+  `\\left(1-t\\right)^{3}${axis}_{s${suffix}}\\left[1...${countName(
+    suffix,
+  )}\\right]+3\\left(1-t\\right)^{2}t${axis}_{c1${suffix}}\\left[1...${countName(
+    suffix,
+  )}\\right]+3\\left(1-t\\right)t^{2}${axis}_{c2${suffix}}\\left[1...${countName(
+    suffix,
+  )}\\right]+t^{3}${axis}_{e${suffix}}\\left[1...${countName(suffix)}\\right]`;
 
-export const CURVE_LATEX = `\\left(${bernstein('X')},${bernstein('Y')}\\right)`;
+export function curveLatex(suffix = ''): string {
+  return `\\left(${bernstein('X', suffix)},${bernstein('Y', suffix)}\\right)`;
+}
+
+export const CURVE_LATEX = curveLatex();
 
 export function frameLatex(shape: FrameShape): string[] {
   return [...frameExpressions(shape).map((expression) => expression.latex), CURVE_LATEX];

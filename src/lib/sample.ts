@@ -1,5 +1,44 @@
 import type { Contour, Point, Slot } from './types';
 
+export const SEGMENT_BUDGET = 20000;
+
+function span(contour: Contour): number {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const segment of contour) {
+    for (const point of [segment.p0, segment.p1]) {
+      if (point.x < minX) minX = point.x;
+      if (point.x > maxX) maxX = point.x;
+      if (point.y < minY) minY = point.y;
+      if (point.y > maxY) maxY = point.y;
+    }
+  }
+
+  return Math.hypot(maxX - minX, maxY - minY);
+}
+
+export function capContours(contours: Contour[], budget = SEGMENT_BUDGET): Contour[] {
+  let total = 0;
+  for (const contour of contours) total += contour.length;
+  if (total <= budget) return contours;
+
+  const ranked = contours
+    .map((contour) => ({ contour, span: span(contour) }))
+    .sort((a, b) => b.span - a.span);
+
+  const kept: Contour[] = [];
+  let used = 0;
+  for (const entry of ranked) {
+    if (used + entry.contour.length > budget) continue;
+    kept.push(entry.contour);
+    used += entry.contour.length;
+  }
+  return kept;
+}
+
 const SUBDIVISIONS = 16;
 
 function cubicAt(s: Extract<Contour[number], { type: 'cubic' }>, t: number): Point {

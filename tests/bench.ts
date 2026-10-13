@@ -107,6 +107,7 @@ const trace: Trace = {
   segmentCount: 0,
   frames,
   overlays: [],
+  source: { width: 200, height: 112, fps: 8, frameCount: FRAMES },
 };
 
 console.log(`frames=${FRAMES} contours=${CONTOURS} canny=${WIDTH}x${HEIGHT}\n`);

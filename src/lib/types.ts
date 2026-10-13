@@ -8,6 +8,13 @@ export type Contour = Segment[];
 
 export type Slot = { offset: number; length: number };
 
+export type SourceVideo = {
+  width: number;
+  height: number;
+  fps: number;
+  frameCount: number;
+};
+
 export type Trace = {
   width: number;
   height: number;
@@ -16,6 +23,7 @@ export type Trace = {
   segmentCount: number;
   frames: Contour[][];
   overlays: ImageBitmap[];
+  source: SourceVideo;
 };
 
 export type Settings = {
@@ -27,9 +35,23 @@ export type Settings = {
   sensitivity: number;
 };
 
-export type WorkerRequest = { file: File; settings: Settings };
+export type WorkerRequest =
+  | { type: 'convert'; file: File; settings: Settings }
+  | { type: 'render'; file: File; detail: number; height: number | null; sensitivity: number }
+  | { type: 'renderNext' }
+  | { type: 'renderClose' };
+
+export type RenderMeta = {
+  type: 'renderMeta';
+  source: SourceVideo;
+  plan: { width: number; height: number };
+  trace: { width: number; height: number };
+};
 
 export type WorkerResponse =
   | { type: 'progress'; label: string; done: number; total: number }
   | { type: 'result'; trace: Trace }
+  | RenderMeta
+  | { type: 'renderFrame'; contours: Contour[]; index: number; total: number }
+  | { type: 'renderDone' }
   | { type: 'error'; message: string };

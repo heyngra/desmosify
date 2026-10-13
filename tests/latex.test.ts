@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CURVE_LATEX, clipLatex, frameExpressions, frameLatex, frameShape, listLatex } from '../src/lib/latex.ts';
+import { CURVE_LATEX, clipLatex, curveLatex, frameExpressions, frameLatex, frameShape, listLatex, shapeChunks } from '../src/lib/latex.ts';
 import { buildFlat } from '../src/lib/sample.ts';
 import type { Contour, Trace } from '../src/lib/types.ts';
 
@@ -26,6 +26,41 @@ test('frameShape rounds coordinates to two decimals', () => {
   const shape = frameShape([[{ type: 'line', p0: { x: 0, y: 0 }, p1: { x: 1.006, y: -2.344 } }]]);
   assert.deepEqual(shape.x.end, [1.01]);
   assert.deepEqual(shape.y.end, [-2.34]);
+});
+
+test('shapeChunks splits a frame into budget-sized frames', () => {
+  const shape = frameShape([contour]);
+  const chunks = shapeChunks(shape, 1);
+
+  assert.equal(chunks.length, 2);
+  assert.deepEqual(chunks.map((chunk) => chunk.count), [1, 1]);
+  assert.deepEqual(chunks[0].x, { start: [0], c1: [10], c2: [20], end: [30] });
+  assert.deepEqual(chunks[1].x, { start: [30], c1: [40], c2: [50], end: [60] });
+});
+
+test('shapeChunks always returns at least one frame', () => {
+  const chunks = shapeChunks(frameShape([]));
+
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0].count, 0);
+});
+
+test('curveLatex suffixes every list so chunks stay independent', () => {
+  const chunk = curveLatex('3');
+
+  assert.ok(chunk.includes('X_{s3}\\left[1...S_{n3}\\right]'));
+  assert.ok(chunk.includes('Y_{e3}'));
+  assert.equal(curveLatex(), CURVE_LATEX);
+});
+
+test('frameExpressions keeps the chunk count inside a subscript', () => {
+  const expressions = frameExpressions(frameShape([contour]), '2');
+
+  assert.deepEqual(
+    expressions.map((expression) => expression.id),
+    ['X_s2', 'X_c12', 'X_c22', 'X_e2', 'Y_s2', 'Y_c12', 'Y_c22', 'Y_e2', 'S2'],
+  );
+  assert.equal(expressions[8].latex, 'S_{n2}=2');
 });
 
 test('frameExpressions lists the shared preview ids in order', () => {
@@ -62,6 +97,7 @@ test('clipLatex emits the flat lists, the frame slider and one expression per sl
     segmentCount: 2,
     frames,
     overlays: [],
+    source: { width: 60, height: 30, fps: 8, frameCount: 1 },
   };
 
   const lines = clipLatex(trace, packed).split('\n');

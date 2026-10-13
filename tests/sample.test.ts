@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildFlat, flatten, polylineLength, resample } from '../src/lib/sample.ts';
+import { buildFlat, capContours, flatten, polylineLength, resample } from '../src/lib/sample.ts';
 import type { Contour, Point, Segment } from '../src/lib/types.ts';
 
 const line = (x0: number, y0: number, x1: number, y1: number): Segment => ({
@@ -122,4 +122,26 @@ test('buildFlat reports contours dropped past the slot limit', () => {
 test('buildFlat handles frames without contours', () => {
   assert.deepEqual(buildFlat([], 9000, 48), { stride: 0, slots: [], flatX: [], flatY: [], dropped: 0 });
   assert.deepEqual(buildFlat([[]], 9000, 48), { stride: 0, slots: [], flatX: [], flatY: [], dropped: 0 });
+});
+
+test('capContours leaves a frame under budget untouched', () => {
+  const contours = [[line(0, 0, 1, 1)], [line(0, 0, 2, 2)]];
+
+  assert.deepEqual(capContours(contours, 10), contours);
+});
+
+test('capContours keeps the widest contours until the budget is spent', () => {
+  const small = [line(0, 0, 1, 1)];
+  const big = [line(0, 0, 100, 100)];
+  const medium = [line(0, 0, 50, 50)];
+  const kept = capContours([small, big, medium], 2);
+
+  assert.deepEqual(kept, [big, medium]);
+});
+
+test('capContours drops whole contours rather than truncating them', () => {
+  const trio = [line(0, 0, 1, 1), line(1, 1, 2, 2), line(2, 2, 3, 3)];
+  const kept = capContours([trio], 2);
+
+  assert.deepEqual(kept, []);
 });
