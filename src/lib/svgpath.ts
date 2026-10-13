@@ -130,10 +130,6 @@ export function parsePath(d: string, t: Transform): Contour[] {
   return contours;
 }
 
-export function parseTracePath(d: string, height: number): Contour[] {
-  return parsePath(d, { tx: 0, ty: height, sx: 0.1, sy: -0.1 });
-}
-
 export function flipToMathSpace(t: Transform, height: number): Transform {
   return { tx: t.tx, ty: height - t.ty, sx: t.sx, sy: -t.sy };
 }
