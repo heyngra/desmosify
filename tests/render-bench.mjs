@@ -19,7 +19,6 @@ const maxFrames = args.get('--maxFrames') ?? '';
 const outDir = resolve(args.get('--out') ?? 'tests/.bench');
 const label = args.get('--label') ?? 'run';
 const profile = args.get('--profile') === '1';
-const workerProfile = args.get('--workerProfile') === '1';
 const keepVideo = args.get('--keepVideo') === '1';
 
 const chromePath =

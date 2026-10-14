@@ -112,7 +112,7 @@ export type Packed = {
   dropped: number;
 };
 
-const LIST_LIMIT = 9800;
+export const LIST_LIMIT = 9800;
 
 const MIN_SLOT_POINTS = 4;
 const BASE_STEP = 0.8;
@@ -208,10 +208,8 @@ function fitStep(lines: FlatContour[][], slotCount: number, perFrame: number): S
 
 export function buildFlat(frames: Contour[][], budget: number, maxSlots: number): Packed {
   const frameCount = Math.max(1, frames.length);
-  const safeBudget = Number.isFinite(budget) ? budget : LIST_LIMIT;
-  const safeSlots = Number.isFinite(maxSlots) ? maxSlots : 32;
-  const perFrame = Math.max(1, Math.floor(safeBudget / frameCount));
-  const cap = Math.max(1, Math.floor(safeSlots));
+  const perFrame = Math.max(1, Math.floor(budget / frameCount));
+  const cap = Math.max(1, Math.floor(maxSlots));
 
   const flattened = frames.map((frame) => flattenFrame(frame, cap));
   const slotCount = Math.min(

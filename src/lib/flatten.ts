@@ -3,7 +3,6 @@ import type { Contour, FlatFrame, FlatGroup, Point } from './types';
 export const FLAT_TOLERANCE = 0.2;
 
 const MAX_POINTS = 90_000;
-
 const MAX_ATTEMPTS = 6;
 
 const CHUNK_POINTS = 9000;
@@ -154,8 +153,8 @@ function finish(groups: PackedGroup[]): FlatFrame {
       for (let i = 0; i < group.x.length; i++) {
         const rawX = group.x[i];
         const rawY = group.y[i];
-        const roundedX = Number.isNaN(rawX) ? Number.NaN : quantize(rawX);
-        const roundedY = Number.isNaN(rawY) ? Number.NaN : quantize(rawY);
+        const roundedX = quantize(rawX);
+        const roundedY = quantize(rawY);
         x[i] = roundedX;
         y[i] = roundedY;
         mix(Number.isNaN(roundedX) ? 0x7fffffff : (roundedX * 100) | 0);

@@ -92,7 +92,6 @@ const idsFor = (index: number): string[] => {
 };
 
 function createPolygonLayer(calc: Calculator, lineWidth: number): (frame: FlatFrame) => number {
-  let mounted: string[] = [];
   let previous = new Map<string, string>();
 
   return (frame) => {
@@ -101,15 +100,11 @@ function createPolygonLayer(calc: Calculator, lineWidth: number): (frame: FlatFr
     if (changed.length > 0) calc.setExpressions(changed);
 
     const next = new Set(expressions.map((expression) => expression.id));
-    for (const id of mounted) {
-      if (!next.has(id)) {
-        calc.removeExpression({ id });
-        previous.delete(id);
-      }
+    for (const id of previous.keys()) {
+      if (!next.has(id)) calc.removeExpression({ id });
     }
 
     previous = new Map(expressions.map((expression) => [expression.id, expression.latex]));
-    mounted = [...next];
     return changed.length;
   };
 }
@@ -144,17 +139,12 @@ async function mountCalculator(
   element: HTMLElement,
   width: number,
   height: number,
-  view: { grid: boolean; chrome: boolean },
+  grid: boolean,
 ): Promise<Calculator> {
   const Desmos = await loadDesmos();
-  const calc = Desmos.GraphingCalculator(element, view.chrome ? undefined : NO_CHROME);
+  const calc = Desmos.GraphingCalculator(element, NO_CHROME);
 
-  calc.updateSettings({
-    showGrid: view.grid,
-    showXAxis: view.grid,
-    showYAxis: view.grid,
-    expressions: false,
-  });
+  calc.updateSettings({ showGrid: grid, showXAxis: grid, showYAxis: grid });
   calc.setMathBounds({ left: 0, right: width, bottom: 0, top: height });
   return calc;
 }
@@ -166,7 +156,7 @@ export type Player = {
 
 export async function createPlayer(element: HTMLElement, trace: Trace): Promise<Player> {
   element.style.aspectRatio = `${trace.width} / ${trace.height}`;
-  const calc = await mountCalculator(element, trace.width, trace.height, { grid: false, chrome: false });
+  const calc = await mountCalculator(element, trace.width, trace.height, false);
   const show = createLayer(calc, PREVIEW_LINE_WIDTH);
 
   return {
@@ -266,7 +256,7 @@ export async function createRenderer(
   height: number,
   lineWidth: number,
 ): Promise<Renderer> {
-  const calc = await mountCalculator(element, width, height, { grid: true, chrome: false });
+  const calc = await mountCalculator(element, width, height, true);
   const internals = calc as Calculator & {
     _calc?: { grapher?: ScreenGrapher; controller?: Controller; tick?: Tick };
   };

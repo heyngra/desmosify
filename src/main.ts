@@ -2,7 +2,7 @@ import { createPlayer, type Player } from './desmos';
 import { describeError } from './lib/error';
 import { clipLatex, frameLatex, frameShape, type FrameShape } from './lib/latex';
 import { lineWidthFor, renderPlan } from './lib/render';
-import { buildFlat } from './lib/sample';
+import { buildFlat, LIST_LIMIT } from './lib/sample';
 import { renderVideo } from './render';
 import type {
   FlatFrame,
@@ -137,7 +137,7 @@ function refreshLatex(shape?: FrameShape) {
 
   const text =
     exportMode.value === 'clip'
-      ? clipText(Math.min(9800, field('#detail')), field('#contours'))
+      ? clipText(Math.min(LIST_LIMIT, field('#detail')), field('#contours'))
       : frameLatex(shape ?? frameShape(trace.frames[frame] ?? [])).join('\n');
 
   if (latexArea.value !== text) latexArea.value = text;
@@ -255,7 +255,7 @@ function pullFrame(): Promise<FlatFrame | null> {
   });
 }
 
-async function* renderFrames(total: number): AsyncGenerator<FlatFrame> {
+async function* prefetchFrames(total: number): AsyncGenerator<FlatFrame> {
   let pending: Promise<FlatFrame | null> = pullFrame();
 
   for (let i = 0; i < total; i++) {
@@ -308,7 +308,7 @@ async function runRender(): Promise<void> {
       lineWidth: lineWidthFor(meta.plan.height, field('#lineWidth')),
     });
     const blob = await renderVideo(
-      { bounds: meta.trace, frames: renderFrames(meta.source.frameCount) },
+      { bounds: meta.trace, frames: prefetchFrames(meta.source.frameCount) },
       plan,
       (done, total) => {
         renderButton.textContent = `Rendering ${Math.round((done / total) * 100)}%`;
@@ -319,7 +319,7 @@ async function runRender(): Promise<void> {
   } catch (error) {
     showNotice(`Render failed (${describeError(error)}).`);
   } finally {
-    if (perfSink) (window as unknown as { __perf?: unknown }).__perf = perfSink;
+    if (perfSink) (window as Window & { __perf?: unknown }).__perf = perfSink;
     if (started) worker.postMessage({ type: 'renderClose' } satisfies WorkerRequest);
     rendering = false;
     renderButton.textContent = 'Render';

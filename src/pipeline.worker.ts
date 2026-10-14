@@ -171,49 +171,46 @@ async function nextRenderFrame(): Promise<void> {
   const perf = current.perf;
   const started = perf ? performance.now() : 0;
 
-  for (;;) {
-    const { value, done } = await current.frames.next();
-    if (session !== current) return;
+  const { value, done } = await current.frames.next();
+  if (session !== current) return;
 
-    if (done || !value) {
-      session = null;
-      send({ type: 'renderDone' });
-      return;
-    }
-
-    const afterDecode = perf ? performance.now() : 0;
-    const { canvas } = value;
-    const image = get2d(canvas).getImageData(0, 0, canvas.width, canvas.height);
-    const afterRead = perf ? performance.now() : 0;
-    const mask = canny(image.data, canvas.width, canvas.height, current.sensitivity);
-    const afterCanny = perf ? performance.now() : 0;
-    const contours = capContours(await traceMask(mask, canvas.width, canvas.height));
-    const afterTrace = perf ? performance.now() : 0;
-    const frame = flattenContours(contours, current.tolerance);
-    if (session !== current) return;
-
-    const transfer = frame.groups.flatMap((group) => [group.x.buffer, group.y.buffer]);
-    send(
-      {
-        type: 'renderFrame',
-        frame,
-        index: current.index++,
-        total: current.total,
-        timing: perf
-          ? {
-              decode: afterDecode - started,
-              read: afterRead - afterDecode,
-              canny: afterCanny - afterRead,
-              trace: afterTrace - afterCanny,
-              segments: contours.reduce((sum, contour) => sum + contour.length, 0),
-              contours: contours.length,
-            }
-          : undefined,
-      },
-      transfer,
-    );
+  if (done || !value) {
+    session = null;
+    send({ type: 'renderDone' });
     return;
   }
+
+  const afterDecode = perf ? performance.now() : 0;
+  const { canvas } = value;
+  const image = get2d(canvas).getImageData(0, 0, canvas.width, canvas.height);
+  const afterRead = perf ? performance.now() : 0;
+  const mask = canny(image.data, canvas.width, canvas.height, current.sensitivity);
+  const afterCanny = perf ? performance.now() : 0;
+  const contours = capContours(await traceMask(mask, canvas.width, canvas.height));
+  const afterTrace = perf ? performance.now() : 0;
+  const frame = flattenContours(contours, current.tolerance);
+  if (session !== current) return;
+
+  const transfer = frame.groups.flatMap((group) => [group.x.buffer, group.y.buffer]);
+  send(
+    {
+      type: 'renderFrame',
+      frame,
+      index: current.index++,
+      total: current.total,
+      timing: perf
+        ? {
+            decode: afterDecode - started,
+            read: afterRead - afterDecode,
+            canny: afterCanny - afterRead,
+            trace: afterTrace - afterCanny,
+            segments: contours.reduce((sum, contour) => sum + contour.length, 0),
+            contours: contours.length,
+          }
+        : undefined,
+    },
+    transfer,
+  );
 }
 
 port.onmessage = async (event) => {
