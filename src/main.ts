@@ -3,7 +3,16 @@ import { clipLatex, frameLatex, frameShape, type FrameShape } from './lib/latex'
 import { lineWidthFor, renderPlan } from './lib/render';
 import { buildFlat } from './lib/sample';
 import { renderVideo } from './render';
-import type { Contour, RenderMeta, Settings, Trace, WorkerRequest, WorkerResponse } from './lib/types';
+import type {
+  FlatFrame,
+  FrameEncodeTiming,
+  FrameTraceTiming,
+  RenderMeta,
+  Settings,
+  Trace,
+  WorkerRequest,
+  WorkerResponse,
+} from './lib/types';
 
 const fileInput = document.querySelector<HTMLInputElement>('#file')!;
 const runButton = document.querySelector<HTMLButtonElement>('#run')!;
@@ -68,6 +77,10 @@ function acceptFile(file: File | undefined) {
 }
 
 const worker = new Worker(new URL('./pipeline.worker.ts', import.meta.url), { type: 'module' });
+const perf = new URLSearchParams(location.search).has('perf');
+const perfSink: { worker: FrameTraceTiming[]; encode: FrameEncodeTiming[] } | null = perf
+  ? { worker: [], encode: [] }
+  : null;
 let busy = false;
 let trace: Trace | null = null;
 let player: Player | null = null;
@@ -76,8 +89,7 @@ let frame = 0;
 let clipCache: { trace: Trace; detail: number; contours: number; latex: string } | null = null;
 let rendering = false;
 let metaWait: { resolve: (meta: RenderMeta) => void; reject: (error: Error) => void } | null = null;
-let frameWait: { resolve: (contours: Contour[] | null) => void; reject: (error: Error) => void } | null =
-  null;
+let frameWait: { resolve: (frame: FlatFrame | null) => void; reject: (error: Error) => void } | null = null;
 
 const settings = (): Settings => ({
   width: field('#width'),
@@ -231,25 +243,25 @@ function startRender(file: File, detail: number, sensitivity: number): Promise<R
   const height = renderSize.value === 'source' ? null : Number(renderSize.value);
   return new Promise((resolve, reject) => {
     metaWait = { resolve, reject };
-    worker.postMessage({ type: 'render', file, detail, height, sensitivity } satisfies WorkerRequest);
+    worker.postMessage({ type: 'render', file, detail, height, sensitivity, perf } satisfies WorkerRequest);
   });
 }
 
-function pullFrame(): Promise<Contour[] | null> {
+function pullFrame(): Promise<FlatFrame | null> {
   return new Promise((resolve, reject) => {
     frameWait = { resolve, reject };
     worker.postMessage({ type: 'renderNext' } satisfies WorkerRequest);
   });
 }
 
-async function* renderFrames(total: number): AsyncGenerator<Contour[]> {
-  let pending: Promise<Contour[] | null> = pullFrame();
+async function* renderFrames(total: number): AsyncGenerator<FlatFrame> {
+  let pending: Promise<FlatFrame | null> = pullFrame();
 
   for (let i = 0; i < total; i++) {
-    const contours = await pending;
-    if (!contours) return;
+    const frame = await pending;
+    if (!frame) return;
     pending = i + 1 < total ? pullFrame() : Promise.resolve(null);
-    yield contours;
+    yield frame;
   }
 }
 
@@ -300,11 +312,13 @@ async function runRender(): Promise<void> {
       (done, total) => {
         renderButton.textContent = `Rendering ${Math.round((done / total) * 100)}%`;
       },
+      perfSink ? (timing) => perfSink.encode.push(timing) : undefined,
     );
     save(blob);
   } catch (error) {
     showNotice(`Render failed (${error instanceof Error ? error.message : 'unknown error'}).`);
   } finally {
+    if (perfSink) (window as unknown as { __perf?: unknown }).__perf = perfSink;
     if (started) worker.postMessage({ type: 'renderClose' } satisfies WorkerRequest);
     rendering = false;
     renderButton.textContent = 'Render';
@@ -323,9 +337,10 @@ worker.onmessage = async (event: MessageEvent<WorkerResponse>) => {
   }
 
   if (message.type === 'renderFrame') {
+    if (perfSink && message.timing) perfSink.worker.push(message.timing);
     const wait = frameWait;
     frameWait = null;
-    wait?.resolve(message.contours);
+    wait?.resolve(message.frame);
     return;
   }
 

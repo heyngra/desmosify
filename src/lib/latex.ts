@@ -1,5 +1,5 @@
 import type { Packed } from './sample';
-import type { Contour, Slot, Trace } from './types';
+import type { Contour, FlatFrame, Slot, Trace } from './types';
 
 const value = (v: number) => (Number.isNaN(v) ? '0/0' : String(v));
 const round = (v: number) => Math.round(v * 100) / 100;
@@ -104,6 +104,36 @@ export const CURVE_LATEX = curveLatex();
 
 export function frameLatex(shape: FrameShape): string[] {
   return [...frameExpressions(shape).map((expression) => expression.latex), CURVE_LATEX];
+}
+
+export type RenderStyle = { color: string; lineWidth: number };
+export type RenderExpression = { id: string; latex: string } & Record<string, unknown>;
+
+export function polygonFrame(frame: FlatFrame, style: RenderStyle): RenderExpression[] {
+  const expressions: RenderExpression[] = [];
+
+  frame.groups.forEach((group, index) => {
+    const suffix = index === 0 ? '' : String(index);
+    expressions.push({
+      id: `X_p${suffix}`,
+      latex: `X_{p${suffix}}=${listLatex(Array.from(group.x))}`,
+      secret: true,
+    });
+    expressions.push({
+      id: `Y_p${suffix}`,
+      latex: `Y_{p${suffix}}=${listLatex(Array.from(group.y))}`,
+      secret: true,
+    });
+    expressions.push({
+      id: `poly${suffix}`,
+      latex: `\\operatorname{polygon}\\left(\\left(X_{p${suffix}},Y_{p${suffix}}\\right)\\right)`,
+      color: style.color,
+      fill: false,
+      lineWidth: style.lineWidth,
+    });
+  });
+
+  return expressions;
 }
 
 function slotRangeLatex(stride: number, slot: Slot): string {

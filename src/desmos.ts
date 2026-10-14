@@ -1,5 +1,12 @@
-import { curveLatex, emptyFrameShape, frameExpressions, shapeChunks, type FrameShape } from './lib/latex';
-import type { Trace } from './lib/types';
+import {
+  curveLatex,
+  emptyFrameShape,
+  frameExpressions,
+  polygonFrame,
+  shapeChunks,
+  type FrameShape,
+} from './lib/latex';
+import type { FlatFrame, Trace } from './lib/types';
 
 const API_KEY = 'dcb31709b452b1cf9dc26972add0fda6';
 const SCRIPT = `https://www.desmos.com/api/v1.11/calculator.js?apiKey=${API_KEY}`;
@@ -84,6 +91,29 @@ const idsFor = (index: number): string[] => {
   ];
 };
 
+function createPolygonLayer(calc: Calculator, lineWidth: number): (frame: FlatFrame) => number {
+  let mounted: string[] = [];
+  let previous = new Map<string, string>();
+
+  return (frame) => {
+    const expressions = polygonFrame(frame, { color: '#2464b4', lineWidth });
+    const changed = expressions.filter((expression) => previous.get(expression.id) !== expression.latex);
+    if (changed.length > 0) calc.setExpressions(changed);
+
+    const next = new Set(expressions.map((expression) => expression.id));
+    for (const id of mounted) {
+      if (!next.has(id)) {
+        calc.removeExpression({ id });
+        previous.delete(id);
+      }
+    }
+
+    previous = new Map(expressions.map((expression) => [expression.id, expression.latex]));
+    mounted = [...next];
+    return changed.length;
+  };
+}
+
 function createLayer(calc: Calculator, lineWidth: number): (shape: FrameShape) => void {
   let mounted = 0;
 
@@ -145,9 +175,11 @@ export async function createPlayer(element: HTMLElement, trace: Trace): Promise<
   };
 }
 
+export type CaptureTiming = { sync: number; draw: number };
+
 export type Renderer = {
-  show(shape: FrameShape): void;
-  capture(canvas: HTMLCanvasElement, width: number, height: number): Promise<void>;
+  show(frame: FlatFrame): number;
+  capture(canvas: HTMLCanvasElement, width: number, height: number): Promise<CaptureTiming>;
   destroy(): void;
 };
 
@@ -241,14 +273,17 @@ export async function createRenderer(
   const grapher = internals._calc?.grapher;
   const controller = internals._calc?.controller;
   const tick = internals._calc?.tick?.bind(internals._calc);
-  const show = createLayer(calc, lineWidth);
+  const show = createPolygonLayer(calc, lineWidth);
 
   return {
-    show: (shape: FrameShape) => show(shape),
+    show: (frame: FlatFrame) => show(frame),
     capture: async (canvas, width, height) => {
+      const syncStart = performance.now();
       await whenSynced(controller, tick);
+      const drawStart = performance.now();
       if (grapher) drawDirect(grapher, canvas, width, height);
       else await drawViaDataUrl(calc, canvas, width, height);
+      return { sync: drawStart - syncStart, draw: performance.now() - drawStart };
     },
     destroy: () => calc.destroy(),
   };

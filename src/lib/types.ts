@@ -8,6 +8,14 @@ export type Contour = Segment[];
 
 export type Slot = { offset: number; length: number };
 
+export type FlatGroup = {
+  x: Float64Array;
+  y: Float64Array;
+  points: number;
+};
+
+export type FlatFrame = { groups: FlatGroup[]; points: number; signature: number };
+
 export type SourceVideo = {
   width: number;
   height: number;
@@ -35,9 +43,37 @@ export type Settings = {
   sensitivity: number;
 };
 
+export type FrameTraceTiming = {
+  decode: number;
+  read: number;
+  canny: number;
+  trace: number;
+  segments: number;
+  contours: number;
+};
+
+export type FrameEncodeTiming = {
+  index: number;
+  wait: number;
+  show: number;
+  changed: number;
+  sync: number;
+  draw: number;
+  encode: number;
+  total: number;
+};
+
 export type WorkerRequest =
   | { type: 'convert'; file: File; settings: Settings }
-  | { type: 'render'; file: File; detail: number; height: number | null; sensitivity: number }
+  | {
+      type: 'render';
+      file: File;
+      detail: number;
+      height: number | null;
+      sensitivity: number;
+      tolerance?: number;
+      perf?: boolean;
+    }
   | { type: 'renderNext' }
   | { type: 'renderClose' };
 
@@ -52,6 +88,6 @@ export type WorkerResponse =
   | { type: 'progress'; label: string; done: number; total: number }
   | { type: 'result'; trace: Trace }
   | RenderMeta
-  | { type: 'renderFrame'; contours: Contour[]; index: number; total: number }
+  | { type: 'renderFrame'; frame: FlatFrame; index: number; total: number; timing?: FrameTraceTiming }
   | { type: 'renderDone' }
   | { type: 'error'; message: string };

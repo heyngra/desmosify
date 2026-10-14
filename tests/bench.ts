@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { canny } from '../src/lib/canny.ts';
+import { flattenContours } from '../src/lib/flatten.ts';
 import { clipLatex, frameLatex, frameShape } from '../src/lib/latex.ts';
 import { buildFlat } from '../src/lib/sample.ts';
 import type { Contour, Trace } from '../src/lib/types.ts';
@@ -118,6 +119,10 @@ measure('canny', 7, () => {
 
 measure('buildFlat', 5, () => {
   buildFlat(frames, BUDGET, SLOTS);
+});
+
+measure('flattenContours', 10, () => {
+  flattenContours(frames[0], 0.2);
 });
 
 const packed = buildFlat(frames, BUDGET, SLOTS);

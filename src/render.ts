@@ -8,9 +8,8 @@ import {
   getFirstEncodableVideoCodec,
 } from 'mediabunny';
 import { createRenderer } from './desmos';
-import { frameShape } from './lib/latex';
 import type { RenderPlan } from './lib/render';
-import type { Contour } from './lib/types';
+import type { FlatFrame, FrameEncodeTiming } from './lib/types';
 
 const CODECS = ['avc', 'vp9', 'av1'] as const;
 
@@ -18,41 +17,18 @@ const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 export type RenderProgress = (done: number, total: number) => void;
 
+export type RenderTiming = (timing: FrameEncodeTiming) => void;
+
 export type RenderJob = {
   bounds: { width: number; height: number };
-  frames: AsyncIterable<Contour[]>;
+  frames: AsyncIterable<FlatFrame>;
 };
-
-function frameSignature(contours: Contour[]): number {
-  let hash = 2166136261;
-
-  const mix = (value: number) => {
-    hash = Math.imul(hash ^ (value * 1000000), 16777619);
-  };
-
-  for (const contour of contours) {
-    mix(contour.length);
-    for (const segment of contour) {
-      mix(segment.p0.x);
-      mix(segment.p0.y);
-      mix(segment.p1.x);
-      mix(segment.p1.y);
-      if (segment.type === 'cubic') {
-        mix(segment.c1.x);
-        mix(segment.c1.y);
-        mix(segment.c2.x);
-        mix(segment.c2.y);
-      }
-    }
-  }
-
-  return hash >>> 0;
-}
 
 export async function renderVideo(
   job: RenderJob,
   plan: RenderPlan,
   onProgress: RenderProgress,
+  onTiming?: RenderTiming,
 ): Promise<Blob> {
   const codec = await getFirstEncodableVideoCodec([...CODECS], {
     width: plan.width,
@@ -82,17 +58,35 @@ export async function renderVideo(
 
     let index = 0;
     let previous: number | null = null;
+    const frames = job.frames[Symbol.asyncIterator]();
 
-    for await (const contours of job.frames) {
-      const signature = frameSignature(contours);
-      if (signature !== previous) {
-        renderer.show(frameShape(contours));
-        await renderer.capture(canvas, plan.width, plan.height);
-        previous = signature;
+    for (;;) {
+      const waitStart = performance.now();
+      const { value: frame, done } = await frames.next();
+      const wait = performance.now() - waitStart;
+      if (done) break;
+
+      let show = 0;
+      let sync = 0;
+      let draw = 0;
+      let changed = 0;
+      if (frame.signature !== previous) {
+        const showStart = performance.now();
+        changed = renderer.show(frame);
+        show = performance.now() - showStart;
+
+        const capture = await renderer.capture(canvas, plan.width, plan.height);
+        sync = capture.sync;
+        draw = capture.draw;
+        previous = frame.signature;
       }
 
+      const encodeStart = performance.now();
       await video.add(index / plan.fps, 1 / plan.fps);
+      const encode = performance.now() - encodeStart;
       index += 1;
+
+      onTiming?.({ index, wait, show, changed, sync, draw, encode, total: wait + show + sync + draw + encode });
 
       if (index % 8 === 0) {
         onProgress(index, plan.frameCount);

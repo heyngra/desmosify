@@ -1,5 +1,6 @@
 import { BlobSource, CanvasSink, Input, MATROSKA, MP4, QTFF, WEBM } from 'mediabunny';
 import { canny } from './lib/canny';
+import { FLAT_TOLERANCE, flattenContours } from './lib/flatten';
 import { outputSize } from './lib/render';
 import { capContours } from './lib/sample';
 import { traceMask } from './lib/trace';
@@ -121,8 +122,10 @@ type SinkFrames = ReturnType<CanvasSink['canvasesAtTimestamps']>;
 type RenderSession = {
   frames: SinkFrames;
   sensitivity: number;
+  tolerance: number;
   index: number;
   total: number;
+  perf: boolean;
 };
 
 let session: RenderSession | null = null;
@@ -138,6 +141,8 @@ async function startRender(
   detail: number,
   height: number | null,
   sensitivity: number,
+  tolerance: number,
+  perf: boolean,
 ): Promise<void> {
   const opened = await open(file);
   const { source } = opened;
@@ -147,13 +152,23 @@ async function startRender(
   const times = Array.from({ length: total }, (_, i) => i / source.fps);
   const sink = new CanvasSink(opened.track, { width: trace.width, poolSize: 2 });
 
-  session = { frames: sink.canvasesAtTimestamps(times), sensitivity, index: 0, total };
+  session = {
+    frames: sink.canvasesAtTimestamps(times),
+    sensitivity,
+    tolerance: Math.max(0.01, tolerance) * (trace.width / plan.width),
+    index: 0,
+    total,
+    perf,
+  };
   send({ type: 'renderMeta', source, plan, trace });
 }
 
 async function nextRenderFrame(): Promise<void> {
   const current = session;
   if (!current) return;
+
+  const perf = current.perf;
+  const started = perf ? performance.now() : 0;
 
   for (;;) {
     const { value, done } = await current.frames.next();
@@ -165,13 +180,37 @@ async function nextRenderFrame(): Promise<void> {
       return;
     }
 
+    const afterDecode = perf ? performance.now() : 0;
     const { canvas } = value;
     const image = get2d(canvas).getImageData(0, 0, canvas.width, canvas.height);
+    const afterRead = perf ? performance.now() : 0;
     const mask = canny(image.data, canvas.width, canvas.height, current.sensitivity);
+    const afterCanny = perf ? performance.now() : 0;
     const contours = capContours(await traceMask(mask, canvas.width, canvas.height));
+    const afterTrace = perf ? performance.now() : 0;
+    const frame = flattenContours(contours, current.tolerance);
     if (session !== current) return;
 
-    send({ type: 'renderFrame', contours, index: current.index++, total: current.total });
+    const transfer = frame.groups.flatMap((group) => [group.x.buffer, group.y.buffer]);
+    send(
+      {
+        type: 'renderFrame',
+        frame,
+        index: current.index++,
+        total: current.total,
+        timing: perf
+          ? {
+              decode: afterDecode - started,
+              read: afterRead - afterDecode,
+              canny: afterCanny - afterRead,
+              trace: afterTrace - afterCanny,
+              segments: contours.reduce((sum, contour) => sum + contour.length, 0),
+              contours: contours.length,
+            }
+          : undefined,
+      },
+      transfer,
+    );
     return;
   }
 }
@@ -185,7 +224,14 @@ port.onmessage = async (event) => {
       send({ type: 'result', trace }, trace.overlays);
     } else if (message.type === 'render') {
       closeRender();
-      await startRender(message.file, message.detail, message.height, message.sensitivity);
+      await startRender(
+        message.file,
+        message.detail,
+        message.height,
+        message.sensitivity,
+        message.tolerance ?? FLAT_TOLERANCE,
+        message.perf ?? false,
+      );
     } else if (message.type === 'renderNext') {
       await nextRenderFrame();
     } else {
