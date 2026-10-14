@@ -88,6 +88,25 @@ const chromeProcess = spawn(
   { stdio: 'ignore' },
 );
 
+const pageLog = [];
+
+function capturePageEvent(message) {
+  if (message.sessionId || !message.method) return;
+  if (message.method === 'Runtime.consoleAPICalled') {
+    const text = (message.params.args ?? [])
+      .map((arg) => arg.value ?? arg.description ?? arg.type)
+      .join(' ');
+    pageLog.push(`[console.${message.params.type}] ${text}`);
+    console.log(`PAGE console.${message.params.type}: ${text}`);
+  }
+  if (message.method === 'Runtime.exceptionThrown') {
+    const details = message.params.exceptionDetails;
+    const text = details.exception?.description ?? details.text;
+    pageLog.push(`[exception] ${text}`);
+    console.log(`PAGE exception: ${text}`);
+  }
+}
+
 let ws;
 let messageId = 0;
 const pendingCalls = new Map();
@@ -112,6 +131,7 @@ async function connect() {
   ws.addEventListener('message', (event) => {
     const message = JSON.parse(event.data);
     events.push(message);
+    capturePageEvent(message);
     if (message.method === 'Target.attachedToTarget') {
       const info = message.params.targetInfo;
       if (info.type === 'worker' || info.type === 'service_worker') {
@@ -266,9 +286,17 @@ async function main() {
 
   const timeout = Number(args.get('--timeout') ?? 3600) * 1000;
   let done = false;
+  let heartbeat = Date.now();
   while (Date.now() - started < timeout) {
     await sleep(500);
     const last = await evaluate(`window.__bench?.last ?? ''`);
+    if (Date.now() - heartbeat > 30000) {
+      heartbeat = Date.now();
+      const noticeText = await evaluate(`document.querySelector('#notice').textContent`);
+      console.log(
+        `HEARTBEAT ${Math.round((Date.now() - started) / 1000)}s status=${last}${noticeText ? ` notice=${noticeText}` : ''}`,
+      );
+    }
     if (last === 'Render') {
       const notice = await evaluate(`document.querySelector('#notice').textContent`);
       const info = await evaluate(`document.querySelector('#renderInfo').textContent`);

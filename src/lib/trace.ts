@@ -1,4 +1,4 @@
-import { init, potrace } from 'esm-potrace-wasm';
+import runtimeUrl from 'esm-potrace-wasm?url';
 import { flipToMathSpace, parsePath, parseTransform } from './svgpath';
 import type { Contour } from './types';
 
@@ -11,11 +11,37 @@ const PARAMS = {
   extractcolors: false,
 };
 
-let ready: Promise<void> | null = null;
+const RECYCLE_AFTER = 120;
 
-function ensureReady(): Promise<void> {
-  if (!ready) ready = init();
-  return ready;
+type PotraceModule = {
+  init: () => Promise<void>;
+  potrace: (image: ImageData, settings: typeof PARAMS & { pathonly: boolean }) => Promise<string>;
+};
+
+let generation = 0;
+let instance: Promise<PotraceModule> | null = null;
+let calls = 0;
+
+function loadInstance(): Promise<PotraceModule> {
+  const url = new URL(runtimeUrl, location.origin);
+  url.hash = `generation=${generation}`;
+  return import(/* @vite-ignore */ url.href).then(async (module: PotraceModule) => {
+    await module.init();
+    return module;
+  });
+}
+
+function currentInstance(): Promise<PotraceModule> {
+  if (!instance) {
+    calls = 0;
+    instance = loadInstance();
+  }
+  return instance;
+}
+
+function recycle(): void {
+  generation += 1;
+  instance = null;
 }
 
 let pixels = new Uint8ClampedArray(0);
@@ -35,9 +61,29 @@ function maskToImageData(mask: Uint8Array, width: number, height: number): Image
   return new ImageData(pixels, width, height);
 }
 
+async function renderSvg(mask: Uint8Array, width: number, height: number): Promise<string> {
+  const image = maskToImageData(mask, width, height);
+  const trace = async (): Promise<string> => {
+    if (calls >= RECYCLE_AFTER) recycle();
+    const module = await currentInstance();
+    calls += 1;
+    return await module.potrace(image, { pathonly: false, ...PARAMS });
+  };
+
+  try {
+    return await trace();
+  } catch (error) {
+    recycle();
+    try {
+      return await trace();
+    } catch {
+      throw error;
+    }
+  }
+}
+
 export async function traceMask(mask: Uint8Array, width: number, height: number): Promise<Contour[]> {
-  await ensureReady();
-  const svg = await potrace(maskToImageData(mask, width, height), { pathonly: false, ...PARAMS });
+  const svg = await renderSvg(mask, width, height);
   if (typeof svg !== 'string') return [];
 
   const transform = flipToMathSpace(parseTransform(svg), height);

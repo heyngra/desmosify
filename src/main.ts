@@ -1,4 +1,5 @@
 import { createPlayer, type Player } from './desmos';
+import { describeError } from './lib/error';
 import { clipLatex, frameLatex, frameShape, type FrameShape } from './lib/latex';
 import { lineWidthFor, renderPlan } from './lib/render';
 import { buildFlat } from './lib/sample';
@@ -316,7 +317,7 @@ async function runRender(): Promise<void> {
     );
     save(blob);
   } catch (error) {
-    showNotice(`Render failed (${error instanceof Error ? error.message : 'unknown error'}).`);
+    showNotice(`Render failed (${describeError(error)}).`);
   } finally {
     if (perfSink) (window as unknown as { __perf?: unknown }).__perf = perfSink;
     if (started) worker.postMessage({ type: 'renderClose' } satisfies WorkerRequest);

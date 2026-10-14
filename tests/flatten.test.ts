@@ -98,6 +98,33 @@ test('flattenContours decimates a contour past the list limit', () => {
   assert.equal(frame.groups[0].x.filter((value) => !Number.isNaN(value)).length < 12_000, true);
 });
 
+test('flattenContours spends a coarser tolerance to stay inside the point budget', () => {
+  const contours: Contour[] = [];
+  for (let i = 0; i < 200; i++) {
+    const r = 40 + (i % 7) * 3;
+    const ox = (i % 20) * 90;
+    const oy = Math.floor(i / 20) * 90;
+    contours.push(cubic({ x: ox, y: oy }, { x: ox, y: oy + r }, { x: ox + r, y: oy + r }, { x: ox + r, y: oy }));
+  }
+
+  const tight = flattenContours(contours, 0.002, 1_000_000);
+  const bounded = flattenContours(contours, 0.002, 4000);
+
+  assert.ok(tight.points > 4000, `expected the tight pass to exceed the budget, got ${tight.points}`);
+  assert.ok(bounded.points < tight.points * 0.15, `expected a large reduction, got ${bounded.points} of ${tight.points}`);
+  assert.ok(bounded.groups.every((group) => group.points <= 9000));
+});
+
+test('flattenContours quantizes coordinates to hundredths', () => {
+  const frame = flattenContours([cubic({ x: 0.123456, y: 0 }, { x: 0, y: 90 }, { x: 90, y: 90 }, { x: 90.987654, y: 0 })], 0.2);
+  for (const group of frame.groups) {
+    for (const value of [...group.x, ...group.y]) {
+      if (Number.isNaN(value)) continue;
+      assert.equal(value, Math.round(value * 100) / 100);
+    }
+  }
+});
+
 test('flattenContours tracks a changing signature', () => {
   const first = flattenContours([cubic({ x: 0, y: 0 }, { x: 0, y: 90 }, { x: 90, y: 90 }, { x: 90, y: 0 })], 0.2);
   const same = flattenContours([cubic({ x: 0, y: 0 }, { x: 0, y: 90 }, { x: 90, y: 90 }, { x: 90, y: 0 })], 0.2);

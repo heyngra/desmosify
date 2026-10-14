@@ -2,7 +2,9 @@ import type { Contour, FlatFrame, FlatGroup, Point } from './types';
 
 export const FLAT_TOLERANCE = 0.2;
 
-const MAX_POINTS = 32_000;
+const MAX_POINTS = 90_000;
+
+const MAX_ATTEMPTS = 6;
 
 const CHUNK_POINTS = 9000;
 
@@ -136,6 +138,8 @@ function totalPoints(groups: PackedGroup[]): number {
   return groups.reduce((sum, group) => sum + group.points, 0);
 }
 
+const quantize = (value: number) => Math.round(value * 100) / 100;
+
 function finish(groups: PackedGroup[]): FlatFrame {
   let hash = 2166136261;
   const mix = (value: number) => {
@@ -145,17 +149,19 @@ function finish(groups: PackedGroup[]): FlatFrame {
   const packedGroups: FlatGroup[] = groups
     .filter((group) => group.points > 0)
     .map((group) => {
+      const x = new Float64Array(group.x.length);
+      const y = new Float64Array(group.y.length);
       for (let i = 0; i < group.x.length; i++) {
-        const x = group.x[i];
-        const y = group.y[i];
-        mix(Number.isNaN(x) ? 0x7fffffff : Math.round(x * 100) | 0);
-        mix(Number.isNaN(y) ? 0x7fffffff : Math.round(y * 100) | 0);
+        const rawX = group.x[i];
+        const rawY = group.y[i];
+        const roundedX = Number.isNaN(rawX) ? Number.NaN : quantize(rawX);
+        const roundedY = Number.isNaN(rawY) ? Number.NaN : quantize(rawY);
+        x[i] = roundedX;
+        y[i] = roundedY;
+        mix(Number.isNaN(roundedX) ? 0x7fffffff : (roundedX * 100) | 0);
+        mix(Number.isNaN(roundedY) ? 0x7fffffff : (roundedY * 100) | 0);
       }
-      return {
-        x: Float64Array.from(group.x),
-        y: Float64Array.from(group.y),
-        points: group.points,
-      };
+      return { x, y, points: group.points };
     });
 
   return { groups: packedGroups, points: totalPoints(groups), signature: hash >>> 0 };
@@ -163,11 +169,13 @@ function finish(groups: PackedGroup[]): FlatFrame {
 
 export function flattenContours(contours: Contour[], tolerance: number, maxPoints = MAX_POINTS): FlatFrame {
   let groups = pack(contours, tolerance);
+  let current = tolerance;
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const points = totalPoints(groups);
     if (points <= maxPoints) break;
-    groups = pack(contours, tolerance * Math.sqrt(points / maxPoints));
+    current *= Math.sqrt(points / maxPoints) * 1.15;
+    groups = pack(contours, current);
   }
 
   return finish(groups);

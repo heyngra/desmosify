@@ -1,5 +1,6 @@
 import { BlobSource, CanvasSink, Input, MATROSKA, MP4, QTFF, WEBM } from 'mediabunny';
 import { canny } from './lib/canny';
+import { describeError } from './lib/error';
 import { FLAT_TOLERANCE, flattenContours } from './lib/flatten';
 import { outputSize } from './lib/render';
 import { capContours } from './lib/sample';
@@ -239,6 +240,6 @@ port.onmessage = async (event) => {
     }
   } catch (error) {
     closeRender();
-    send({ type: 'error', message: error instanceof Error ? error.message : String(error) });
+    send({ type: 'error', message: describeError(error) });
   }
 };
