@@ -41,6 +41,7 @@ export type Settings = {
   detail: number;
   contours: number;
   sensitivity: number;
+  smoothing: boolean;
 };
 
 export type FrameTraceTiming = {
@@ -73,6 +74,7 @@ export type WorkerRequest =
       sensitivity: number;
       tolerance?: number;
       perf?: boolean;
+      smoothing?: boolean;
     }
   | { type: 'renderNext' }
   | { type: 'renderClose' };
@@ -82,6 +84,7 @@ export type RenderMeta = {
   source: SourceVideo;
   plan: { width: number; height: number };
   trace: { width: number; height: number };
+  hasAudio: boolean;
 };
 
 export type WorkerResponse =

@@ -40,6 +40,7 @@ function fit(width: number, displayWidth: number, displayHeight: number): { widt
 
 type Opened = {
   track: NonNullable<Awaited<ReturnType<Input['getPrimaryVideoTrack']>>>;
+  audio: Awaited<ReturnType<Input['getPrimaryAudioTrack']>>;
   duration: number;
   displayWidth: number;
   displayHeight: number;
@@ -61,9 +62,11 @@ async function open(file: File): Promise<Opened> {
   const displayWidth = await track.getDisplayWidth();
   const displayHeight = await track.getDisplayHeight();
   const stats = await track.computePacketStats();
+  const audio = await input.getPrimaryAudioTrack().catch(() => null);
 
   return {
     track,
+    audio,
     duration: await input.computeDuration(),
     displayWidth,
     displayHeight,
@@ -105,7 +108,7 @@ async function convert(file: File, settings: Settings): Promise<Trace> {
 
     const image = get2d(canvas).getImageData(0, 0, canvas.width, canvas.height);
     const mask = canny(image.data, canvas.width, canvas.height, settings.sensitivity);
-    const contours = await traceMask(mask, canvas.width, canvas.height);
+    const contours = await traceMask(mask, canvas.width, canvas.height, settings.smoothing === true);
 
     segmentCount += contours.reduce((sum, contour) => sum + contour.length, 0);
     traced.push(contours);
@@ -124,6 +127,7 @@ type RenderSession = {
   frames: SinkFrames;
   sensitivity: number;
   tolerance: number;
+  smoothing: boolean;
   index: number;
   total: number;
   perf: boolean;
@@ -144,6 +148,7 @@ async function startRender(
   sensitivity: number,
   tolerance: number,
   perf: boolean,
+  smoothing: boolean,
 ): Promise<void> {
   const opened = await open(file);
   const { source } = opened;
@@ -157,11 +162,12 @@ async function startRender(
     frames: sink.canvasesAtTimestamps(times),
     sensitivity,
     tolerance: Math.max(0.01, tolerance) * (trace.width / plan.width),
+    smoothing,
     index: 0,
     total,
     perf,
   };
-  send({ type: 'renderMeta', source, plan, trace });
+  send({ type: 'renderMeta', source, plan, trace, hasAudio: opened.audio !== null });
 }
 
 async function nextRenderFrame(): Promise<void> {
@@ -186,7 +192,7 @@ async function nextRenderFrame(): Promise<void> {
   const afterRead = perf ? performance.now() : 0;
   const mask = canny(image.data, canvas.width, canvas.height, current.sensitivity);
   const afterCanny = perf ? performance.now() : 0;
-  const contours = capContours(await traceMask(mask, canvas.width, canvas.height));
+  const contours = capContours(await traceMask(mask, canvas.width, canvas.height, current.smoothing));
   const afterTrace = perf ? performance.now() : 0;
   const frame = flattenContours(contours, current.tolerance);
   if (session !== current) return;
@@ -229,6 +235,7 @@ port.onmessage = async (event) => {
         message.sensitivity,
         message.tolerance ?? FLAT_TOLERANCE,
         message.perf ?? false,
+        message.smoothing === true,
       );
     } else if (message.type === 'renderNext') {
       await nextRenderFrame();

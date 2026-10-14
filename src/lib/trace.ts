@@ -1,4 +1,5 @@
 import runtimeUrl from 'esm-potrace-wasm?url';
+import { SMOOTH_TRACE_PIXELS, smoothContours } from './smooth';
 import { flipToMathSpace, parsePath, parseTransform } from './svgpath';
 import type { Contour } from './types';
 
@@ -82,7 +83,12 @@ async function renderSvg(mask: Uint8Array, width: number, height: number): Promi
   }
 }
 
-export async function traceMask(mask: Uint8Array, width: number, height: number): Promise<Contour[]> {
+export async function traceMask(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  smoothing = false,
+): Promise<Contour[]> {
   const svg = await renderSvg(mask, width, height);
   if (typeof svg !== 'string') return [];
 
@@ -91,5 +97,5 @@ export async function traceMask(mask: Uint8Array, width: number, height: number)
   for (const match of svg.matchAll(/<path[^>]*\sd="([^"]+)"/g)) {
     contours.push(...parsePath(match[1], transform));
   }
-  return contours;
+  return smoothing ? smoothContours(contours, SMOOTH_TRACE_PIXELS) : contours;
 }

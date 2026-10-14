@@ -32,6 +32,10 @@
             <label>Clip contours <input id="contours" type="number" value="48" min="4" max="128" step="4" /></label>
             <label>Edge cutoff <input id="sensitivity" type="number" value="0.6" min="0.3" max="0.95" step="0.05" /></label>
           </div>
+          <label class="toggle">
+            <input id="smooth" type="checkbox" checked />
+            Smooth curves
+          </label>
         </details>
       </section>
 
@@ -84,6 +88,10 @@
             <input id="lineWidth" type="number" value="3" min="1" max="24" step="1" />
           </label>
         </div>
+        <label class="toggle">
+          <input id="renderAudio" type="checkbox" />
+          Include source audio
+        </label>
         <div class="row">
           <button id="renderCancel" class="ghost" type="button">Cancel</button>
           <button id="renderGo" type="button">Render</button>

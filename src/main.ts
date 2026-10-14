@@ -37,6 +37,8 @@ const renderDialog = document.querySelector<HTMLDialogElement>('#renderDialog')!
 const renderCancel = document.querySelector<HTMLButtonElement>('#renderCancel')!;
 const renderGo = document.querySelector<HTMLButtonElement>('#renderGo')!;
 const renderSize = document.querySelector<HTMLSelectElement>('#renderSize')!;
+const renderAudio = document.querySelector<HTMLInputElement>('#renderAudio')!;
+const smoothToggle = document.querySelector<HTMLInputElement>('#smooth')!;
 
 const field = (id: string) => Number(document.querySelector<HTMLInputElement>(id)!.value);
 const formatFps = (fps: number) => `${Math.round(fps * 100) / 100} fps`;
@@ -99,6 +101,7 @@ const settings = (): Settings => ({
   detail: field('#detail'),
   contours: field('#contours'),
   sensitivity: field('#sensitivity'),
+  smoothing: smoothToggle.checked,
 });
 
 function drawOverlay() {
@@ -244,7 +247,7 @@ function startRender(file: File, detail: number, sensitivity: number): Promise<R
   const height = renderSize.value === 'source' ? null : Number(renderSize.value);
   return new Promise((resolve, reject) => {
     metaWait = { resolve, reject };
-    worker.postMessage({ type: 'render', file, detail, height, sensitivity, perf } satisfies WorkerRequest);
+    worker.postMessage({ type: 'render', file, detail, height, sensitivity, perf, smoothing: smoothToggle.checked } satisfies WorkerRequest);
   });
 }
 
@@ -289,6 +292,8 @@ async function runRender(): Promise<void> {
   const file = fileInput.files?.[0];
   if (!file || rendering || busy) return;
 
+  const wantsAudio = renderAudio.checked;
+
   rendering = true;
   renderButton.textContent = 'Converting…';
   syncControls();
@@ -302,13 +307,19 @@ async function runRender(): Promise<void> {
       `${meta.plan.width}×${meta.plan.height} · ${formatFps(meta.source.fps)} · ${meta.source.frameCount} frames` +
       ` · trace ${meta.trace.width}×${meta.trace.height}`;
 
+    if (wantsAudio && !meta.hasAudio) showNotice('This source has no audio track; rendering video only.');
+
     const plan = renderPlan(meta.source, {
       width: meta.plan.width,
       height: meta.plan.height,
       lineWidth: lineWidthFor(meta.plan.height, field('#lineWidth')),
     });
     const blob = await renderVideo(
-      { bounds: meta.trace, frames: prefetchFrames(meta.source.frameCount) },
+      {
+        bounds: meta.trace,
+        frames: prefetchFrames(meta.source.frameCount),
+        audio: wantsAudio && meta.hasAudio ? file : undefined,
+      },
       plan,
       (done, total) => {
         renderButton.textContent = `Rendering ${Math.round((done / total) * 100)}%`;
