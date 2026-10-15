@@ -63,7 +63,21 @@ test('canny is deterministic', () => {
   assert.deepEqual(canny(rgba, 80, 60, 0.7), canny(rgba, 80, 60, 0.7));
 });
 
-test('canny keeps fewer pixels at a higher percentile', () => {
+test('canny keeps fewer pixels at a higher cutoff', () => {
   const rgba = render(96, 72, (x, y) => 128 + Math.sin(x / 6) * 40 + Math.cos(y / 5) * 40);
-  assert.ok(count(canny(rgba, 96, 72, 0.95)) <= count(canny(rgba, 96, 72, 0.5)));
+  assert.ok(count(canny(rgba, 96, 72, 0.95)) <= count(canny(rgba, 96, 72, 0.3)));
+});
+
+test('canny ignores low-amplitude noise beside a real edge', () => {
+  const width = 96;
+  const height = 72;
+  const rgba = render(width, height, (x, y) => (x < 48 ? 60 : 200) + ((x * 7 + y * 13) % 11) - 5);
+  const mask = canny(rgba, width, height, 0.6);
+
+  assert.ok(count(mask) > 0);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (mask[y * width + x]) assert.ok(Math.abs(x - 48) <= 2, `noise pixel at x=${x}, y=${y}`);
+    }
+  }
 });

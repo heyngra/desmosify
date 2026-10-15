@@ -39,6 +39,12 @@ const renderGo = document.querySelector<HTMLButtonElement>('#renderGo')!;
 const renderSize = document.querySelector<HTMLSelectElement>('#renderSize')!;
 const renderAudio = document.querySelector<HTMLInputElement>('#renderAudio')!;
 const smoothToggle = document.querySelector<HTMLInputElement>('#smooth')!;
+const cutoffInput = document.querySelector<HTMLInputElement>('#sensitivity')!;
+const cutoffValue = document.querySelector<HTMLOutputElement>('#sensitivityValue')!;
+
+function syncCutoff(): void {
+  cutoffValue.value = Number(cutoffInput.value).toFixed(2);
+}
 
 const field = (id: string) => Number(document.querySelector<HTMLInputElement>(id)!.value);
 const formatFps = (fps: number) => `${Math.round(fps * 100) / 100} fps`;
@@ -85,6 +91,8 @@ const perfSink: { worker: FrameTraceTiming[]; encode: FrameEncodeTiming[] } | nu
   ? { worker: [], encode: [] }
   : null;
 let busy = false;
+let keepFrameOnResult = false;
+let pendingReconvert = false;
 let trace: Trace | null = null;
 let player: Player | null = null;
 let timer: number | null = null;
@@ -198,20 +206,39 @@ dropZone.addEventListener('drop', (event) => {
   acceptFile(event.dataTransfer?.files[0]);
 });
 
-runButton.addEventListener('click', () => {
+function runConvert(keepFrame: boolean): void {
   const file = fileInput.files?.[0];
   if (!file || busy || rendering) return;
 
   busy = true;
+  keepFrameOnResult = keepFrame;
   runButton.textContent = 'Converting…';
-  output.hidden = true;
-  previewCard.hidden = true;
+  if (!keepFrame) {
+    output.hidden = true;
+    previewCard.hidden = true;
+  }
   showNotice('');
   stop();
   syncControls();
 
   worker.postMessage({ type: 'convert', file, settings: settings() } satisfies WorkerRequest);
+}
+
+runButton.addEventListener('click', () => runConvert(false));
+
+cutoffInput.addEventListener('input', syncCutoff);
+
+cutoffInput.addEventListener('change', () => {
+  syncCutoff();
+  if (!trace) return;
+  if (busy || rendering) {
+    pendingReconvert = true;
+    return;
+  }
+  runConvert(true);
 });
+
+syncCutoff();
 
 playButton.addEventListener('click', () => {
   if (timer === null) start();
@@ -375,6 +402,8 @@ worker.onmessage = async (event: MessageEvent<WorkerResponse>) => {
       return;
     }
     busy = false;
+    keepFrameOnResult = false;
+    pendingReconvert = false;
     runButton.textContent = 'Convert';
     showNotice(message.message);
     syncControls();
@@ -383,11 +412,19 @@ worker.onmessage = async (event: MessageEvent<WorkerResponse>) => {
 
   busy = false;
   runButton.textContent = 'Convert';
+  const keepFrame = keepFrameOnResult;
+  keepFrameOnResult = false;
+  const previous = trace;
+  const reuse =
+    keepFrame && !!player && !!previous && previous.width === message.trace.width && previous.height === message.trace.height;
+
   releaseTrace();
   trace = message.trace;
-  player?.destroy();
-  player = null;
-  frame = 0;
+  if (!reuse) {
+    player?.destroy();
+    player = null;
+  }
+  frame = keepFrame ? Math.min(frame, trace.frameCount - 1) : 0;
 
   latexArea.value = '';
   output.hidden = false;
@@ -398,11 +435,16 @@ worker.onmessage = async (event: MessageEvent<WorkerResponse>) => {
   syncControls();
 
   try {
-    player = await createPlayer(calculator, trace);
+    if (!player) player = await createPlayer(calculator, trace);
     paint();
-    start();
+    if (!keepFrame) start();
   } catch (error) {
     previewCard.hidden = true;
     showNotice(`Preview unavailable (${error instanceof Error ? error.message : 'unknown error'}).`);
+  }
+
+  if (pendingReconvert) {
+    pendingReconvert = false;
+    runConvert(true);
   }
 };

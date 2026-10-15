@@ -186,6 +186,22 @@ summary::-webkit-details-marker {
   color: var(--pink-400);
 }
 
+.grid label.slider {
+  grid-column: 1 / -1;
+}
+
+.slider-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.slider-head output {
+  color: var(--pink-600);
+  font-variant-numeric: tabular-nums;
+}
+
 input[type='number'],
 select {
   width: 100%;
